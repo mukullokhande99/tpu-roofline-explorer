@@ -79,7 +79,16 @@ class RooflineTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             GemmWorkload("bad", 4, 4, 4, "bf16", 0.5, 1)
 
+    def test_vxu_uses_lane_waves_without_systolic_fill_drain(self) -> None:
+        vxu = Architecture("vxu", 0.512, 100.0, 1.0, 1, 256, "vxu", 256)
+        mxu = Architecture("mxu", 2.048, 100.0, 1.0, 32, 32)
+        workload = GemmWorkload("vector", 1, 1025, 4, "int8")
+        self.assertEqual(math.ceil(workload.n / 256), 5)
+        self.assertGreater(mxu_utilization(workload, vxu), 0)
+        self.assertNotEqual(
+            mxu_utilization(workload, vxu), mxu_utilization(workload, mxu)
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
-

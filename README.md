@@ -23,6 +23,8 @@ Python CLI model.
 - Posit-8, Posit-16, MXFP4, MXINT8, and NVFP4 storage formats
 - Model/layer presets for Llama 3 8B, Qwen2.5 1.5B, ViT-B/16, and custom GEMMs
 - Structured-pruning sweep from 0% to 100% in 5% increments
+- Compute-fabric presets for 32×32, 64×64, 128×128, and 256×256 systolic MXUs
+- Vector-fabric presets for 256-, 1024-, and 4096-lane VXUs
 
 ## Development branches
 
@@ -107,6 +109,11 @@ Device latency = max(resources) + (1 - overlap) * (sum(resources) - max(resource
 End-to-end latency = device latency + host overhead + kernels * launch overhead
 Energy = compute + HBM + SRAM + NoC dynamic energy + static power * latency
 ```
+
+MXU presets use two-dimensional output tiling, spatial padding, and systolic
+fill/drain. VXU presets use one-dimensional vector waves and lane occupancy;
+their nominal 1 GHz peak assumes two operations per lane per cycle. Peak TOPS,
+frequency-equivalent throughput, and energy coefficients remain editable.
 
 At 100% overlap the device equation becomes the normal roofline maximum. Posit
 and floating-point MACs use a four-stage Decode → Multiply → Accumulate → Encode

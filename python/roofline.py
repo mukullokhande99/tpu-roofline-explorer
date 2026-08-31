@@ -38,6 +38,8 @@ class Architecture:
     sram_capacity_mib: float
     mxu_rows: int
     mxu_cols: int
+    compute_fabric: str = "mxu"
+    vector_lanes: int | None = None
 
     def __post_init__(self) -> None:
         if self.peak_compute_tops <= 0 or self.hbm_bandwidth_gbs <= 0:
@@ -46,6 +48,10 @@ class Architecture:
             raise ValueError("SRAM capacity cannot be negative")
         if self.mxu_rows <= 0 or self.mxu_cols <= 0:
             raise ValueError("MXU dimensions must be positive integers")
+        if self.compute_fabric not in {"mxu", "vxu"}:
+            raise ValueError("Compute fabric must be 'mxu' or 'vxu'")
+        if self.compute_fabric == "vxu" and (self.vector_lanes or 0) <= 0:
+            raise ValueError("VXU architectures require a positive vector lane count")
 
 
 @dataclass(frozen=True)
@@ -97,6 +103,8 @@ class RooflineResult:
     peak_compute_tops: float
     hbm_bandwidth_gbs: float
     sram_capacity_mib: float
+    compute_fabric: str
+    vector_lanes: int
     requested_weight_reuse: float
     requested_activation_reuse: float
     effective_weight_reuse: float
@@ -127,10 +135,17 @@ def total_operations(workload: GemmWorkload) -> int:
 
 
 def _tile_counts(workload: GemmWorkload, architecture: Architecture) -> tuple[int, int]:
+    rows, cols = _tile_shape(architecture)
     return (
-        math.ceil(workload.m / architecture.mxu_rows),
-        math.ceil(workload.n / architecture.mxu_cols),
+        math.ceil(workload.m / rows),
+        math.ceil(workload.n / cols),
     )
+
+
+def _tile_shape(architecture: Architecture) -> tuple[int, int]:
+    if architecture.compute_fabric == "vxu":
+        return 1, int(architecture.vector_lanes or architecture.mxu_cols)
+    return architecture.mxu_rows, architecture.mxu_cols
 
 
 def estimate_hbm_traffic(
@@ -149,8 +164,9 @@ def estimate_hbm_traffic(
     value_bytes = precision_bytes(workload.precision)
     density = 1.0 - workload.pruning_percent / 100.0
     tiles_m, tiles_n = _tile_counts(workload, architecture)
-    tile_m = min(workload.m, architecture.mxu_rows)
-    tile_n = min(workload.n, architecture.mxu_cols)
+    tile_rows, tile_cols = _tile_shape(architecture)
+    tile_m = min(workload.m, tile_rows)
+    tile_n = min(workload.n, tile_cols)
 
     a_compulsory = workload.m * workload.k * value_bytes
     b_compulsory = workload.k * workload.n * value_bytes * density
@@ -200,11 +216,10 @@ def approximate_bytes_transferred(
 
 def mxu_utilization(workload: GemmWorkload, architecture: Architecture) -> float:
     """Estimate useful/scheduled work including padding and fill/drain."""
-    rows, cols = architecture.mxu_rows, architecture.mxu_cols
+    rows, cols = _tile_shape(architecture)
     tiles_m, tiles_n = _tile_counts(workload, architecture)
-    scheduled_mac_slots = tiles_m * tiles_n * rows * cols * (
-        workload.k + rows + cols - 2
-    )
+    fill_drain = rows + cols - 2 if architecture.compute_fabric == "mxu" else 0
+    scheduled_mac_slots = tiles_m * tiles_n * rows * cols * (workload.k + fill_drain)
     useful_macs = workload.m * workload.n * workload.k * (1.0 - workload.pruning_percent / 100.0)
     return useful_macs / scheduled_mac_slots
 
@@ -237,6 +252,8 @@ def evaluate(
         peak_compute_tops=architecture.peak_compute_tops,
         hbm_bandwidth_gbs=architecture.hbm_bandwidth_gbs,
         sram_capacity_mib=architecture.sram_capacity_mib,
+        compute_fabric=architecture.compute_fabric,
+        vector_lanes=int(architecture.vector_lanes or architecture.mxu_cols),
         requested_weight_reuse=workload.weight_reuse_factor,
         requested_activation_reuse=workload.activation_reuse_factor,
         effective_weight_reuse=traffic.effective_weight_reuse,
@@ -259,10 +276,15 @@ def evaluate(
 
 
 def default_architectures() -> list[Architecture]:
-    """Single-MXU designs at 1 GHz, with equal HBM bandwidth and SRAM."""
+    """MXU and VXU presets at 1 GHz, with equal HBM bandwidth and SRAM."""
     return [
+        Architecture("MXU-32x32", 2.048, 900.0, 64.0, 32, 32),
+        Architecture("MXU-64x64", 8.192, 900.0, 64.0, 64, 64),
         Architecture("A-128x128", 32.768, 900.0, 64.0, 128, 128),
         Architecture("B-256x256", 131.072, 900.0, 64.0, 256, 256),
+        Architecture("VXU-256", 0.512, 900.0, 64.0, 1, 256, "vxu", 256),
+        Architecture("VXU-1024", 2.048, 900.0, 64.0, 1, 1024, "vxu", 1024),
+        Architecture("VXU-4096", 8.192, 900.0, 64.0, 1, 4096, "vxu", 4096),
     ]
 
 
@@ -355,7 +377,7 @@ def plot_roofline(results: Sequence[RooflineResult], path: Path) -> None:
     x_values = np.logspace(-1, math.log10(max(1e4, max_ai * 2)), 500)
 
     fig, ax = plt.subplots(figsize=(11, 7), constrained_layout=True)
-    colors = ["#1f77b4", "#d95f02", "#2ca02c", "#9467bd"]
+    colors = ["#1f77b4", "#d95f02", "#2ca02c", "#9467bd", "#8c564b", "#e377c2", "#17becf"]
     workload_markers = {
         "square-4096": ("o", "4096 cube"),
         "up-projection-prefill": ("s", "Up-projection prefill"),
@@ -464,6 +486,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pruning-percent", type=int, default=0, choices=range(0, 101, 5), help="Structured pruning percentage (0..100 in 5% steps)")
     parser.add_argument("--mxu-rows", type=int, help="MXU row count")
     parser.add_argument("--mxu-cols", type=int, help="MXU column count")
+    parser.add_argument("--fabric", choices=("mxu", "vxu"), default="mxu")
+    parser.add_argument("--vector-lanes", type=int, help="VXU lane count")
     parser.add_argument("--name", default="custom", help="Custom architecture name")
     parser.add_argument(
         "--read-output",
@@ -507,6 +531,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.sram_mib,
                 args.mxu_rows,
                 args.mxu_cols,
+                args.fabric,
+                (args.vector_lanes or args.mxu_cols) if args.fabric == "vxu" else None,
             )
         ]
         workloads = [

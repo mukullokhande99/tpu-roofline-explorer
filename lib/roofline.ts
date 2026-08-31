@@ -25,9 +25,12 @@ export type LoopOrder = "m-n-k" | "n-m-k" | "k-m-n";
 export type Dataflow = "output-stationary" | "weight-stationary" | "activation-stationary";
 export type FusionLevel = "none" | "epilogue" | "aggressive";
 export type CompilerLevel = "basic" | "tiled" | "aggressive";
+export type ComputeFabric = "mxu" | "vxu";
 
 export type Architecture = {
   name: string;
+  computeFabric?: ComputeFabric;
+  vectorLanes?: number;
   peakComputeTopsPerMxu: number;
   hbmBandwidthGbs: number;
   hbmEfficiency: number;
@@ -88,7 +91,10 @@ export type RooflineResult = {
   hostLatencySeconds: number;
   estimatedLatencySeconds: number;
   estimatedPerformanceTops: number;
-  bottleneck: "MXU" | "HBM" | "SRAM" | "NoC";
+  bottleneck: "MXU" | "VXU" | "HBM" | "SRAM" | "NoC";
+  computeFabric: ComputeFabric;
+  vectorLanes: number;
+  vectorWaves: number;
   tilesM: number;
   tilesN: number;
   workers: number;
@@ -171,6 +177,11 @@ export function evaluateRoofline(
     sramEfficiency: clamp01(architectureInput.sramEfficiency),
     mxuRows: Math.max(1, Math.round(positive(architectureInput.mxuRows))),
     mxuCols: Math.max(1, Math.round(positive(architectureInput.mxuCols))),
+    computeFabric: architectureInput.computeFabric ?? "mxu",
+    vectorLanes: Math.max(
+      1,
+      Math.round(positive(architectureInput.vectorLanes ?? architectureInput.mxuCols)),
+    ),
     coreCount: Math.max(1, Math.round(positive(architectureInput.coreCount))),
     mxusPerCore: Math.max(1, Math.round(positive(architectureInput.mxusPerCore))),
     nocBandwidthGbs: positive(architectureInput.nocBandwidthGbs),
@@ -192,10 +203,12 @@ export function evaluateRoofline(
   const weightBytes = STORAGE_BITS[w.weightPrecision] / 8;
   const outputValueBytes = STORAGE_BITS[w.outputPrecision] / 8;
   const accumulatorBytes = ACCUMULATOR_BITS[w.accumulatorPrecision] / 8;
-  const tilesM = Math.ceil(w.m / a.mxuRows);
-  const tilesN = Math.ceil(w.n / a.mxuCols);
-  const tileM = Math.min(w.m, a.mxuRows);
-  const tileN = Math.min(w.n, a.mxuCols);
+  const tileRows = a.computeFabric === "vxu" ? 1 : a.mxuRows;
+  const tileCols = a.computeFabric === "vxu" ? a.vectorLanes : a.mxuCols;
+  const tilesM = Math.ceil(w.m / tileRows);
+  const tilesN = Math.ceil(w.n / tileCols);
+  const tileM = Math.min(w.m, tileRows);
+  const tileN = Math.min(w.n, tileCols);
   const workers = a.coreCount * a.mxusPerCore;
   const outputTileCount = tilesM * tilesN;
 
@@ -246,9 +259,14 @@ export function evaluateRoofline(
     ? "Decode → Multiply → Accumulate → Encode"
     : "Multiply → Accumulate";
   const quireFinalizeCycles = w.accumulatorPrecision === "quire128" ? 2 : 0;
-  const fillDrainCycles = a.mxuRows + a.mxuCols - 2 + pipelineDepth - 1 + quireFinalizeCycles;
+  const fillDrainCycles =
+    (a.computeFabric === "mxu" ? tileRows + tileCols - 2 : 0) +
+    pipelineDepth -
+    1 +
+    quireFinalizeCycles;
   const cyclesPerTile = w.k + (1 - a.pipelineOverlap) * fillDrainCycles;
-  const scheduledMacSlots = outputTileCount * a.mxuRows * a.mxuCols * cyclesPerTile;
+  const scheduledMacSlots =
+    outputTileCount * tileRows * tileCols * cyclesPerTile;
   const usefulMacs = w.m * w.n * w.k * density;
   const mxuUtilization = Math.min(1, usefulMacs / scheduledMacSlots);
   const parallelUtilization = Math.min(1, outputTileCount / workers);
@@ -279,7 +297,12 @@ export function evaluateRoofline(
   const deviceLatencySeconds = dominantTime + (1 - a.overlapEfficiency) * (resourceSum - dominantTime);
   const hostLatencySeconds = Math.max(0, a.hostOverheadUs + fusion.kernels * a.launchOverheadUs) * 1e-6;
   const estimatedLatencySeconds = deviceLatencySeconds + hostLatencySeconds;
-  const bottleneckNames: RooflineResult["bottleneck"][] = ["MXU", "HBM", "SRAM", "NoC"];
+  const bottleneckNames: RooflineResult["bottleneck"][] = [
+    a.computeFabric === "vxu" ? "VXU" : "MXU",
+    "HBM",
+    "SRAM",
+    "NoC",
+  ];
   const bottleneck = bottleneckNames[resourceTimes.indexOf(dominantTime)];
 
   const computeEnergyJ = operations * Math.max(0, a.computeEnergyPjPerOp) * 1e-12;
@@ -306,6 +329,9 @@ export function evaluateRoofline(
     estimatedLatencySeconds,
     estimatedPerformanceTops: operations / estimatedLatencySeconds / 1e12,
     bottleneck,
+    computeFabric: a.computeFabric,
+    vectorLanes: a.vectorLanes,
+    vectorWaves: outputTileCount,
     tilesM,
     tilesN,
     workers,

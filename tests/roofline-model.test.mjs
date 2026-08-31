@@ -41,3 +41,20 @@ test("supports new formats, model-layer style workloads, and 5% pruning", async 
   assert.equal(pruned.operations, dense.operations / 2);
   assert.ok(pruned.weightReadBytes < dense.weightReadBytes);
 });
+
+test("models VXU lane waves separately from systolic MXU tiles", async () => {
+  const { evaluateRoofline } = await vite.ssrLoadModule("/lib/roofline.ts");
+  const vxu = evaluateRoofline(
+    { ...architecture, computeFabric: "vxu", vectorLanes: 256, mxuRows: 1, mxuCols: 256 },
+    { ...workload, m: 1, n: 1025, k: 4, pruningPercent: 0 },
+  );
+  const mxu = evaluateRoofline(
+    { ...architecture, computeFabric: "mxu", mxuRows: 32, mxuCols: 32 },
+    { ...workload, m: 1, n: 1025, k: 4, pruningPercent: 0 },
+  );
+  assert.equal(vxu.computeFabric, "vxu");
+  assert.equal(vxu.vectorLanes, 256);
+  assert.equal(vxu.vectorWaves, 5);
+  assert.equal(vxu.bottleneck === "VXU" || vxu.bottleneck !== "MXU", true);
+  assert.notEqual(vxu.cyclesPerTile, mxu.cyclesPerTile);
+});

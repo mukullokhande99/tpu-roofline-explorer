@@ -20,6 +20,7 @@ import {
   type AccumulatorPrecision,
   type Architecture,
   type CompilerLevel,
+  type ComputeFabric,
   type Dataflow,
   type FusionLevel,
   type LoopOrder,
@@ -32,8 +33,68 @@ import {
 } from "@/lib/roofline";
 
 const ARCHITECTURES: Record<string, Architecture> = {
+  mxu32: {
+    name: "32×32 MXU",
+    computeFabric: "mxu",
+    vectorLanes: 32,
+    peakComputeTopsPerMxu: 2.048,
+    hbmBandwidthGbs: 900,
+    hbmEfficiency: 0.8,
+    sramBankCount: 1024,
+    sramBankBandwidthGbs: 32,
+    sramEfficiency: 0.8,
+    sramAllocationA: 35,
+    sramAllocationB: 45,
+    sramAllocationC: 20,
+    mxuRows: 32,
+    mxuCols: 32,
+    coreCount: 1,
+    mxusPerCore: 1,
+    nocBandwidthGbs: 800,
+    multicastFactor: 1,
+    overlapEfficiency: 0.85,
+    pipelineOverlap: 0.8,
+    hostOverheadUs: 8,
+    launchOverheadUs: 4,
+    computeEnergyPjPerOp: 0.9,
+    hbmEnergyPjPerByte: 12,
+    sramEnergyPjPerByte: 1.2,
+    nocEnergyPjPerByte: 2,
+    staticPowerW: 20,
+  },
+  mxu64: {
+    name: "64×64 MXU",
+    computeFabric: "mxu",
+    vectorLanes: 64,
+    peakComputeTopsPerMxu: 8.192,
+    hbmBandwidthGbs: 900,
+    hbmEfficiency: 0.8,
+    sramBankCount: 1024,
+    sramBankBandwidthGbs: 32,
+    sramEfficiency: 0.8,
+    sramAllocationA: 35,
+    sramAllocationB: 45,
+    sramAllocationC: 20,
+    mxuRows: 64,
+    mxuCols: 64,
+    coreCount: 1,
+    mxusPerCore: 1,
+    nocBandwidthGbs: 800,
+    multicastFactor: 1,
+    overlapEfficiency: 0.85,
+    pipelineOverlap: 0.8,
+    hostOverheadUs: 8,
+    launchOverheadUs: 4,
+    computeEnergyPjPerOp: 0.8,
+    hbmEnergyPjPerByte: 12,
+    sramEnergyPjPerByte: 1.2,
+    nocEnergyPjPerByte: 2,
+    staticPowerW: 30,
+  },
   a: {
     name: "A · 128×128 MXU",
+    computeFabric: "mxu",
+    vectorLanes: 128,
     peakComputeTopsPerMxu: 32.768,
     hbmBandwidthGbs: 900,
     hbmEfficiency: 0.8,
@@ -61,6 +122,8 @@ const ARCHITECTURES: Record<string, Architecture> = {
   },
   b: {
     name: "B · 256×256 MXU",
+    computeFabric: "mxu",
+    vectorLanes: 256,
     peakComputeTopsPerMxu: 131.072,
     hbmBandwidthGbs: 900,
     hbmEfficiency: 0.8,
@@ -85,6 +148,93 @@ const ARCHITECTURES: Record<string, Architecture> = {
     sramEnergyPjPerByte: 1.2,
     nocEnergyPjPerByte: 2,
     staticPowerW: 70,
+  },
+  vxu256: {
+    name: "256-lane VXU",
+    computeFabric: "vxu",
+    vectorLanes: 256,
+    peakComputeTopsPerMxu: 0.512,
+    hbmBandwidthGbs: 900,
+    hbmEfficiency: 0.8,
+    sramBankCount: 1024,
+    sramBankBandwidthGbs: 32,
+    sramEfficiency: 0.8,
+    sramAllocationA: 35,
+    sramAllocationB: 45,
+    sramAllocationC: 20,
+    mxuRows: 1,
+    mxuCols: 256,
+    coreCount: 1,
+    mxusPerCore: 1,
+    nocBandwidthGbs: 800,
+    multicastFactor: 1,
+    overlapEfficiency: 0.85,
+    pipelineOverlap: 0.8,
+    hostOverheadUs: 8,
+    launchOverheadUs: 4,
+    computeEnergyPjPerOp: 0.85,
+    hbmEnergyPjPerByte: 12,
+    sramEnergyPjPerByte: 1.2,
+    nocEnergyPjPerByte: 2,
+    staticPowerW: 25,
+  },
+  vxu1024: {
+    name: "1024-lane VXU",
+    computeFabric: "vxu",
+    vectorLanes: 1024,
+    peakComputeTopsPerMxu: 2.048,
+    hbmBandwidthGbs: 900,
+    hbmEfficiency: 0.8,
+    sramBankCount: 1024,
+    sramBankBandwidthGbs: 32,
+    sramEfficiency: 0.8,
+    sramAllocationA: 35,
+    sramAllocationB: 45,
+    sramAllocationC: 20,
+    mxuRows: 1,
+    mxuCols: 1024,
+    coreCount: 1,
+    mxusPerCore: 1,
+    nocBandwidthGbs: 800,
+    multicastFactor: 1,
+    overlapEfficiency: 0.85,
+    pipelineOverlap: 0.8,
+    hostOverheadUs: 8,
+    launchOverheadUs: 4,
+    computeEnergyPjPerOp: 0.75,
+    hbmEnergyPjPerByte: 12,
+    sramEnergyPjPerByte: 1.2,
+    nocEnergyPjPerByte: 2,
+    staticPowerW: 35,
+  },
+  vxu4096: {
+    name: "4096-lane VXU",
+    computeFabric: "vxu",
+    vectorLanes: 4096,
+    peakComputeTopsPerMxu: 8.192,
+    hbmBandwidthGbs: 900,
+    hbmEfficiency: 0.8,
+    sramBankCount: 1024,
+    sramBankBandwidthGbs: 32,
+    sramEfficiency: 0.8,
+    sramAllocationA: 35,
+    sramAllocationB: 45,
+    sramAllocationC: 20,
+    mxuRows: 1,
+    mxuCols: 4096,
+    coreCount: 1,
+    mxusPerCore: 1,
+    nocBandwidthGbs: 800,
+    multicastFactor: 1,
+    overlapEfficiency: 0.85,
+    pipelineOverlap: 0.8,
+    hostOverheadUs: 8,
+    launchOverheadUs: 4,
+    computeEnergyPjPerOp: 0.65,
+    hbmEnergyPjPerByte: 12,
+    sramEnergyPjPerByte: 1.2,
+    nocEnergyPjPerByte: 2,
+    staticPowerW: 55,
   },
 };
 
@@ -461,6 +611,27 @@ export function RooflineExplorer() {
     setArchitecture(
       (current) => ({ ...current, [field]: value }) as Architecture,
     );
+  const updateFabric = (fabric: ComputeFabric) =>
+    setArchitecture((current) =>
+      fabric === "vxu"
+        ? {
+            ...current,
+            computeFabric: fabric,
+            vectorLanes: current.vectorLanes ?? current.mxuCols,
+          }
+        : {
+            ...current,
+            computeFabric: fabric,
+            mxuRows: current.mxuRows === 1 ? 128 : current.mxuRows,
+            mxuCols: current.mxuRows === 1 ? 128 : current.mxuCols,
+          },
+    );
+  const updateVectorLanes = (lanes: number) =>
+    setArchitecture((current) => ({
+      ...current,
+      vectorLanes: lanes,
+      mxuCols: lanes,
+    }));
   const updateWorkload = (
     field: keyof Workload,
     value: Workload[keyof Workload],
@@ -562,8 +733,11 @@ export function RooflineExplorer() {
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="a">A · 128×128 MXU</SelectItem>
-                        <SelectItem value="b">B · 256×256 MXU</SelectItem>
+                        {Object.entries(ARCHITECTURES).map(([key, preset]) => (
+                          <SelectItem key={key} value={key}>
+                            {preset.name}
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                   </label>
@@ -906,25 +1080,48 @@ export function RooflineExplorer() {
               </TabsContent>
               <TabsContent value="system" className="tab-content">
                 <div className="control-section">
-                  <p className="section-label">MXU fabric</p>
+                  <p className="section-label">Compute fabric</p>
+                  <label className="control-field">
+                    <span>Fabric type</span>
+                    <Select
+                      value={architecture.computeFabric ?? "mxu"}
+                      onValueChange={(v) => updateFabric(v as ComputeFabric)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="mxu">2-D systolic MXU</SelectItem>
+                        <SelectItem value="vxu">Vector VXU</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </label>
                   <NumberField
-                    label="Peak compute per MXU · TOPS"
+                    label={`Peak compute per ${architecture.computeFabric === "vxu" ? "VXU" : "MXU"} · TOPS`}
                     value={architecture.peakComputeTopsPerMxu}
                     step={0.001}
                     onChange={(v) => updateArch("peakComputeTopsPerMxu", v)}
                   />
-                  <div className="number-grid two">
+                  {architecture.computeFabric === "vxu" ? (
                     <NumberField
-                      label="MXU rows"
-                      value={architecture.mxuRows}
-                      onChange={(v) => updateArch("mxuRows", v)}
+                      label="Vector lanes"
+                      value={architecture.vectorLanes ?? architecture.mxuCols}
+                      onChange={updateVectorLanes}
                     />
-                    <NumberField
-                      label="MXU cols"
-                      value={architecture.mxuCols}
-                      onChange={(v) => updateArch("mxuCols", v)}
-                    />
-                  </div>
+                  ) : (
+                    <div className="number-grid two">
+                      <NumberField
+                        label="MXU rows"
+                        value={architecture.mxuRows}
+                        onChange={(v) => updateArch("mxuRows", v)}
+                      />
+                      <NumberField
+                        label="MXU cols"
+                        value={architecture.mxuCols}
+                        onChange={(v) => updateArch("mxuCols", v)}
+                      />
+                    </div>
+                  )}
                   <div className="number-grid two">
                     <NumberField
                       label="TPU cores"
@@ -932,7 +1129,7 @@ export function RooflineExplorer() {
                       onChange={(v) => updateArch("coreCount", v)}
                     />
                     <NumberField
-                      label="MXUs per core"
+                      label={`${architecture.computeFabric === "vxu" ? "VXUs" : "MXUs"} per core`}
                       value={architecture.mxusPerCore}
                       onChange={(v) => updateArch("mxusPerCore", v)}
                     />
@@ -1053,7 +1250,7 @@ export function RooflineExplorer() {
             />
             <MetricCard
               icon={Cpu}
-              label="MXU utilization"
+              label={`${result.computeFabric === "vxu" ? "VXU lane" : "MXU"} utilization`}
               value={`${(result.mxuUtilization * 100).toFixed(1)}%`}
               detail={`${result.workers} worker${result.workers === 1 ? "" : "s"} · ${(result.parallelUtilization * 100).toFixed(0)}% occupied`}
             />
@@ -1132,8 +1329,12 @@ export function RooflineExplorer() {
             </DetailCard>
             <DetailCard title="System schedule">
               <Row
-                label="Output tiles"
-                value={`${result.tilesM} × ${result.tilesN}`}
+                label={result.computeFabric === "vxu" ? "Vector waves" : "Output tiles"}
+                value={
+                  result.computeFabric === "vxu"
+                    ? `${result.vectorWaves} × ${result.vectorLanes} lanes`
+                    : `${result.tilesM} × ${result.tilesN}`
+                }
               />
               <Row
                 label="Peak / compiler ceiling"
@@ -1180,9 +1381,10 @@ export function RooflineExplorer() {
       <footer className="model-note">
         <span>MODEL ASSUMPTION</span>Posit/FP uses a fully pipelined Decode →
         Multiply → Accumulate → Encode path: four stages affect fill/drain
-        latency, not steady-state MAC issue rate. Dataflow, reuse, spill,
-        compiler, and energy coefficients are visible heuristics rather than
-        cycle-accurate TPU measurements.
+        latency, not steady-state MAC issue rate. MXUs use 2-D systolic
+        fill/drain and padding; VXUs use vector-lane occupancy and wave
+        scheduling. Dataflow, reuse, spill, compiler, and energy coefficients
+        are visible heuristics rather than cycle-accurate TPU measurements.
       </footer>
     </main>
   );
