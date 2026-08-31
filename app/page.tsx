@@ -1,5 +1,5 @@
-import { RooflineExplorer } from "@/components/roofline-explorer";
+import { RooflineExplorerV2 } from "@/components/roofline-explorer-v2";
 
 export default function Home() {
-  return <RooflineExplorer />;
+  return <RooflineExplorerV2 />;
 }

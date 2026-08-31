@@ -17,9 +17,14 @@ from typing import Iterable, Sequence
 
 PRECISION_BITS = {
     "posit-(4,1)": 4,
+    "posit-8": 8,
+    "posit-16": 16,
     "fp2": 2,
     "int4": 4,
     "int8": 8,
+    "mxfp4": 4,
+    "mxint8": 8,
+    "nvfp4": 4,
     "bf16": 16,
     "fp32": 32,
 }
@@ -52,6 +57,7 @@ class GemmWorkload:
     precision: str = "bf16"
     weight_reuse_factor: float = 8.0
     activation_reuse_factor: float = 4.0
+    pruning_percent: int = 0
 
     def __post_init__(self) -> None:
         normalized = self.precision.lower()
@@ -64,6 +70,8 @@ class GemmWorkload:
             )
         if self.weight_reuse_factor < 1 or self.activation_reuse_factor < 1:
             raise ValueError("Reuse factors must be at least 1")
+        if not 0 <= self.pruning_percent <= 100 or self.pruning_percent % 5:
+            raise ValueError("Pruning must be an integer from 0 to 100 in 5% steps")
 
 
 @dataclass(frozen=True)
@@ -96,6 +104,8 @@ class RooflineResult:
     sram_residency: float
     tile_working_set_bytes: float
     total_operations: int
+    dense_operations: int
+    pruning_percent: int
     bytes_transferred: float
     arithmetic_intensity_ops_per_byte: float
     ridge_point_ops_per_byte: float
@@ -137,12 +147,13 @@ def estimate_hbm_traffic(
     working set. Traffic never falls below one compulsory read of A/B.
     """
     value_bytes = precision_bytes(workload.precision)
+    density = 1.0 - workload.pruning_percent / 100.0
     tiles_m, tiles_n = _tile_counts(workload, architecture)
     tile_m = min(workload.m, architecture.mxu_rows)
     tile_n = min(workload.n, architecture.mxu_cols)
 
     a_compulsory = workload.m * workload.k * value_bytes
-    b_compulsory = workload.k * workload.n * value_bytes
+    b_compulsory = workload.k * workload.n * value_bytes * density
     c_write = workload.m * workload.n * value_bytes
     if read_output:
         c_write *= 2
@@ -194,7 +205,7 @@ def mxu_utilization(workload: GemmWorkload, architecture: Architecture) -> float
     scheduled_mac_slots = tiles_m * tiles_n * rows * cols * (
         workload.k + rows + cols - 2
     )
-    useful_macs = workload.m * workload.n * workload.k
+    useful_macs = workload.m * workload.n * workload.k * (1.0 - workload.pruning_percent / 100.0)
     return useful_macs / scheduled_mac_slots
 
 
@@ -204,7 +215,8 @@ def evaluate(
     *,
     read_output: bool = False,
 ) -> RooflineResult:
-    ops = total_operations(workload)
+    dense_ops = total_operations(workload)
+    ops = int(dense_ops * (1.0 - workload.pruning_percent / 100.0))
     traffic = estimate_hbm_traffic(workload, architecture, read_output=read_output)
     intensity = ops / traffic.total_bytes
     utilization = mxu_utilization(workload, architecture)
@@ -232,6 +244,8 @@ def evaluate(
         sram_residency=traffic.sram_residency,
         tile_working_set_bytes=traffic.tile_working_set_bytes,
         total_operations=ops,
+        dense_operations=dense_ops,
+        pruning_percent=workload.pruning_percent,
         bytes_transferred=traffic.total_bytes,
         arithmetic_intensity_ops_per_byte=intensity,
         ridge_point_ops_per_byte=ridge_point,
@@ -256,8 +270,9 @@ def default_workloads(
     precision: str = "bf16",
     weight_reuse_factor: float = 8.0,
     activation_reuse_factor: float = 4.0,
+    pruning_percent: int = 0,
 ) -> list[GemmWorkload]:
-    common = (precision, weight_reuse_factor, activation_reuse_factor)
+    common = (precision, weight_reuse_factor, activation_reuse_factor, pruning_percent)
     return [
         GemmWorkload("square-4096", 4096, 4096, 4096, *common),
         GemmWorkload("up-projection-prefill", 4096, 11008, 4096, *common),
@@ -446,6 +461,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--sram-mib", type=float, help="On-chip SRAM capacity in MiB")
     parser.add_argument("--weight-reuse", type=float, default=8.0)
     parser.add_argument("--activation-reuse", type=float, default=4.0)
+    parser.add_argument("--pruning-percent", type=int, default=0, choices=range(0, 101, 5), help="Structured pruning percentage (0..100 in 5% steps)")
     parser.add_argument("--mxu-rows", type=int, help="MXU row count")
     parser.add_argument("--mxu-cols", type=int, help="MXU column count")
     parser.add_argument("--name", default="custom", help="Custom architecture name")
@@ -502,12 +518,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.precision,
                 args.weight_reuse,
                 args.activation_reuse,
+                args.pruning_percent,
             )
         ]
     else:
         architectures = default_architectures()
         workloads = default_workloads(
-            args.precision, args.weight_reuse, args.activation_reuse
+            args.precision, args.weight_reuse, args.activation_reuse, args.pruning_percent
         )
 
     results = evaluate_many(architectures, workloads, read_output=args.read_output)
@@ -523,4 +540,3 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

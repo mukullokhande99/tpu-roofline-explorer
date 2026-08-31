@@ -37,7 +37,15 @@ const WORKLOADS = {
   token: { name: "Small-token / batch GEMM", m: 1, n: 11008, k: 4096 },
 };
 
-const STORAGE: Array<[StoragePrecision, string]> = [["posit-(4,1)", "Posit-(4,1)"], ["fp2", "FP2"], ["int4", "INT4"], ["int8", "INT8"], ["bf16", "BF16"], ["fp32", "FP32"]];
+const MODEL_LAYERS = {
+  llama3_8b: { name: "Llama 3 · 8B", layers: { qkv: [4096, 4096, 4096], mlp_up: [4096, 11008, 4096], mlp_down: [4096, 4096, 11008], lm_head: [1, 128256, 4096] } },
+  qwen25_15b: { name: "Qwen2.5 · 1.5B", layers: { qkv: [1, 896, 896], mlp_up: [1, 4864, 896], mlp_down: [1, 896, 4864], lm_head: [1, 151936, 896] } },
+  vit_b16: { name: "ViT-B/16", layers: { patch_embed: [197, 768, 768], qkv: [197, 2304, 768], mlp_up: [197, 3072, 768], mlp_down: [197, 768, 3072] } },
+  custom: { name: "Custom GEMM", layers: { custom: [4096, 4096, 4096] } },
+} as const;
+type ModelKey = keyof typeof MODEL_LAYERS;
+type LayerKey = string;
+const STORAGE: Array<[StoragePrecision, string]> = [["posit-(4,1)", "Posit-(4,1)"], ["posit-8", "Posit-8"], ["posit-16", "Posit-16"], ["fp2", "FP2"], ["int4", "INT4"], ["int8", "INT8"], ["mxfp4", "MXFP4 · microscaled"], ["mxint8", "MXINT8 · microscaled"], ["nvfp4", "NVFP4"], ["bf16", "BF16"], ["fp32", "FP32"]];
 const ACCUMULATORS: Array<[AccumulatorPrecision, string]> = [["int32", "INT32"], ["bf16", "BF16"], ["fp32", "FP32"], ["quire128", "Quire-128"]];
 
 function NumberField({ label, value, onChange, step = 1 }: { label: string; value: number; onChange: (value: number) => void; step?: number }) {
@@ -76,13 +84,17 @@ function RooflineGraph({ result, architecture, workload }: { result: ReturnType<
 export function RooflineExplorer() {
   const [architectureKey, setArchitectureKey] = useState("a");
   const [workloadKey, setWorkloadKey] = useState<keyof typeof WORKLOADS>("square");
+  const [modelKey, setModelKey] = useState<ModelKey>("llama3_8b");
+  const [layerKey, setLayerKey] = useState<LayerKey>("mlp_up");
   const [architecture, setArchitecture] = useState<Architecture>(ARCHITECTURES.a);
-  const [workload, setWorkload] = useState<Workload>({ ...WORKLOADS.square, activationPrecision: "bf16", weightPrecision: "bf16", outputPrecision: "bf16", accumulatorPrecision: "fp32", weightReuseFactor: 8, activationReuseFactor: 4, loopOrder: "m-n-k", dataflow: "output-stationary", fusionLevel: "epilogue", compilerLevel: "tiled" });
+  const [workload, setWorkload] = useState<Workload>({ ...WORKLOADS.square, activationPrecision: "bf16", weightPrecision: "bf16", outputPrecision: "bf16", accumulatorPrecision: "fp32", weightReuseFactor: 8, activationReuseFactor: 4, loopOrder: "m-n-k", dataflow: "output-stationary", fusionLevel: "epilogue", compilerLevel: "tiled", pruningPercent: 0 });
   const result = useMemo(() => evaluateRoofline(architecture, workload), [architecture, workload]);
   const updateArch = (field: keyof Architecture, value: number) => setArchitecture(current => ({ ...current, [field]: value } as Architecture));
   const updateWorkload = (field: keyof Workload, value: Workload[keyof Workload]) => setWorkload(current => ({ ...current, [field]: value } as Workload));
   const selectArchitecture = (key: string) => { setArchitectureKey(key); setArchitecture(ARCHITECTURES[key]); };
   const selectWorkload = (key: string) => { const typed = key as keyof typeof WORKLOADS; setWorkloadKey(typed); setWorkload(current => ({ ...current, ...WORKLOADS[typed] })); };
+  const selectModel = (key: string) => { const typed = key as ModelKey; const firstLayer = Object.keys(MODEL_LAYERS[typed].layers)[0]; const dims = MODEL_LAYERS[typed].layers[firstLayer as never] as readonly number[]; setModelKey(typed); setLayerKey(firstLayer); setWorkload(current => ({ ...current, name: `${MODEL_LAYERS[typed].name} · ${firstLayer}`, m: dims[0], n: dims[1], k: dims[2] })); };
+  const selectLayer = (key: string) => { const dims = MODEL_LAYERS[modelKey].layers[key as never] as readonly number[]; setLayerKey(key); setWorkload(current => ({ ...current, name: `${MODEL_LAYERS[modelKey].name} · ${key}`, m: dims[0], n: dims[1], k: dims[2] })); };
 
   return <main className="explorer-shell"><header className="site-header"><div className="brand-mark" aria-hidden="true"><span /><span /><span /></div><div><p className="eyebrow">ARCHITECTURE LAB · 01</p><h1>TPU Roofline Explorer</h1><p className="header-copy">A transparent tiled-GEMM model spanning arithmetic format, on-chip memory, interconnect, compiler choices, and energy.</p></div><nav className="assignment-nav" aria-label="Architecture lab assignments"><Link className="assignment-tab assignment-tab-active" href="/">Assignment 1<span>Roofline</span></Link><Link className="assignment-tab" href="/assignment-2">Assignment 2<span>Flex-TPU</span></Link></nav><Badge variant="outline" className="model-badge">ANALYTIC MODEL</Badge></header>
     <section className="explorer-grid"><Card className="controls-panel"><CardHeader className="controls-header"><CardTitle>System inputs</CardTitle><span>Updates live</span></CardHeader><CardContent className="control-stack"><Tabs defaultValue="model" className="w-full"><TabsList className="model-tabs"><TabsTrigger value="model">Model</TabsTrigger><TabsTrigger value="memory">Memory</TabsTrigger><TabsTrigger value="system">System</TabsTrigger><TabsTrigger value="energy">Energy</TabsTrigger></TabsList>

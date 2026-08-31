@@ -29,3 +29,15 @@ test("overlap, HBM efficiency, multicore NoC, and energy are explicit", async ()
   assert.ok(overlapped.totalEnergyJ > 0);
   assert.equal(overlapped.averagePowerW, overlapped.totalEnergyJ / overlapped.estimatedLatencySeconds);
 });
+
+test("supports new formats, model-layer style workloads, and 5% pruning", async () => {
+  const { evaluateRoofline, STORAGE_BITS } = await vite.ssrLoadModule("/lib/roofline.ts");
+  for (const precision of ["posit-8", "posit-16", "mxfp4", "mxint8", "nvfp4"]) {
+    assert.ok(STORAGE_BITS[precision] > 0);
+  }
+  const dense = evaluateRoofline(architecture, { ...workload, name: "Qwen2.5 · mlp_up", pruningPercent: 0, weightPrecision: "mxfp4" });
+  const pruned = evaluateRoofline(architecture, { ...workload, pruningPercent: 50, weightPrecision: "mxfp4" });
+  assert.equal(pruned.pruningPercent, 50);
+  assert.equal(pruned.operations, dense.operations / 2);
+  assert.ok(pruned.weightReadBytes < dense.weightReadBytes);
+});

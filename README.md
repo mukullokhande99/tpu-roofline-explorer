@@ -20,6 +20,9 @@ Python CLI model.
 - Compute-bound, HBM-bound, and estimated latency
 - Arithmetic intensity and the roofline operating point
 - Posit-(4,1), FP2, INT4, INT8, BF16, and FP32 storage precision
+- Posit-8, Posit-16, MXFP4, MXINT8, and NVFP4 storage formats
+- Model/layer presets for Llama 3 8B, Qwen2.5 1.5B, ViT-B/16, and custom GEMMs
+- Structured-pruning sweep from 0% to 100% in 5% increments
 
 ## Development branches
 
@@ -39,7 +42,8 @@ cycle-accurate TPU claims, and each coefficient will remain visible in the UI.
 
 ## Interactive UI
 
-The interface exposes architecture and workload presets plus independent
+The interface exposes architecture and workload presets plus selectable model
+layers and independent
 activation/weight/output/accumulator precision; MXU/core counts; 64 KiB SRAM
 banking and A/B/C allocation; HBM/SRAM/NoC efficiency; multicast; loop order,
 dataflow, fusion, compiler, tile-overlap, and host controls; plus energy
@@ -60,12 +64,15 @@ npm test
 
 ## Python model
 
-The Python implementation lives in `python/roofline.py`.
+The Python implementation lives in `python/roofline.py`. Its `GemmWorkload`
+accepts `pruning_percent` at 0, 5, 10, …, 100; pruning reduces useful MACs and
+weight traffic while leaving dense MXU slot capacity visible in utilization.
 
 ```bash
 cd python
 python roofline.py \
-  --precision bf16 \
+  --precision mxfp4 \
+  --pruning-percent 25 \
   --weight-reuse 8 \
   --activation-reuse 4 \
   --csv results.csv \

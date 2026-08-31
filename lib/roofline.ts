@@ -1,8 +1,13 @@
 export const STORAGE_BITS = {
   "posit-(4,1)": 4,
+  "posit-8": 8,
+  "posit-16": 16,
   fp2: 2,
   int4: 4,
   int8: 8,
+  mxfp4: 4,
+  mxint8: 8,
+  nvfp4: 4,
   bf16: 16,
   fp32: 32,
 } as const;
@@ -64,10 +69,13 @@ export type Workload = {
   dataflow: Dataflow;
   fusionLevel: FusionLevel;
   compilerLevel: CompilerLevel;
+  pruningPercent: number;
 };
 
 export type RooflineResult = {
   operations: number;
+  denseOperations: number;
+  pruningPercent: number;
   bytesTransferred: number;
   arithmeticIntensity: number;
   mxuUtilization: number;
@@ -177,6 +185,7 @@ export function evaluateRoofline(
     k: Math.max(1, Math.round(positive(workloadInput.k))),
     weightReuseFactor: positive(workloadInput.weightReuseFactor),
     activationReuseFactor: positive(workloadInput.activationReuseFactor),
+    pruningPercent: Math.min(100, Math.max(0, Math.round(workloadInput.pruningPercent ?? 0))),
   };
 
   const activationBytes = STORAGE_BITS[w.activationPrecision] / 8;
@@ -216,7 +225,8 @@ export function evaluateRoofline(
   const effectiveWeightReuse = 1 + (Math.max(1, requestedWeightReuse) - 1) * residencyB;
 
   const activationCompulsory = w.m * w.k * activationBytes;
-  const weightCompulsory = w.k * w.n * weightBytes;
+  const density = 1 - w.pruningPercent / 100;
+  const weightCompulsory = w.k * w.n * weightBytes * density;
   const activationReadBytes = Math.max(activationCompulsory, activationCompulsory * tilesN / effectiveActivationReuse);
   const weightReadBytes = Math.max(weightCompulsory, weightCompulsory * tilesM / effectiveWeightReuse);
   const fusion = FUSION[w.fusionLevel];
@@ -226,7 +236,8 @@ export function evaluateRoofline(
     (w.loopOrder === "k-m-n" ? 1 : 0);
   const cSpillBytes = 2 * w.m * w.n * accumulatorBytes * (1 - residencyC) * cSpillMultiplier;
   const bytesTransferred = activationReadBytes + weightReadBytes + outputBytes + cSpillBytes;
-  const operations = 2 * w.m * w.n * w.k;
+  const denseOperations = 2 * w.m * w.n * w.k;
+  const operations = denseOperations * density;
   const arithmeticIntensity = operations / bytesTransferred;
 
   const decodedPipeline = isDecodedNumber(w.activationPrecision) || isDecodedNumber(w.weightPrecision);
@@ -238,7 +249,7 @@ export function evaluateRoofline(
   const fillDrainCycles = a.mxuRows + a.mxuCols - 2 + pipelineDepth - 1 + quireFinalizeCycles;
   const cyclesPerTile = w.k + (1 - a.pipelineOverlap) * fillDrainCycles;
   const scheduledMacSlots = outputTileCount * a.mxuRows * a.mxuCols * cyclesPerTile;
-  const usefulMacs = w.m * w.n * w.k;
+  const usefulMacs = w.m * w.n * w.k * density;
   const mxuUtilization = Math.min(1, usefulMacs / scheduledMacSlots);
   const parallelUtilization = Math.min(1, outputTileCount / workers);
   const compilerEfficiency = COMPILER_EFFICIENCY[w.compilerLevel];
@@ -280,6 +291,8 @@ export function evaluateRoofline(
 
   return {
     operations,
+    denseOperations,
+    pruningPercent: w.pruningPercent,
     bytesTransferred,
     arithmeticIntensity,
     mxuUtilization,
