@@ -83,7 +83,7 @@ export function FlexTpuExplorer() {
   const [compilerEfficiency, setCompilerEfficiency] = useState(90);
   const [weightReuse, setWeightReuse] = useState(8);
   const [activationReuse, setActivationReuse] = useState(4);
-  const [workloadShape, setWorkloadShape] = useState({ m: workloadPresets.gemm.m, n: workloadPresets.gemm.n, k: workloadPresets.gemm.k });
+  const [workloadShape, setWorkloadShape] = useState<{ m: number; n: number; k: number }>({ m: workloadPresets.gemm.m, n: workloadPresets.gemm.n, k: workloadPresets.gemm.k });
   const workload = { ...workloadPresets[workloadKey], ...workloadShape };
   const result = useMemo(() => {
     const lanes = lanesFor(precision);
