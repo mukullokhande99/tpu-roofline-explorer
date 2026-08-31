@@ -35,6 +35,8 @@ Python CLI model.
 
 ## Development branches
 
+- `assignment-3-nvidia-gpu`: staged NVIDIA GPU roofline work. The first milestone adds the GPU-specific analytical core, Ampere/Hopper/Blackwell presets, hierarchical memory ceilings, occupancy, tensor-tile utilization, structured 2:4 sparsity, and multi-GPU communication modeling. It remains off `master` until the Assignment 3 UI and integration tests are complete.
+
 - `master` is the stable, tested explorer.
 - `full-system-modeling` is the integration branch for the expanded model.
 - The integration branch returns to `master` only after the web UI, TypeScript
