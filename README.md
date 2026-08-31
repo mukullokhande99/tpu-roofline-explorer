@@ -4,6 +4,8 @@ An interactive, SRAM-aware roofline model for TPU-style systolic accelerators.
 The project combines a browser-based architecture workbench with a reusable
 Python CLI model.
 
+**Live explorer:** https://mukullokhande99.github.io/tpu-roofline-explorer/
+
 ## What it models
 
 - GEMM operation count for `C[M,N] = A[M,K] @ B[K,N]`
@@ -16,7 +18,7 @@ Python CLI model.
 
 ## Development branches
 
-- `master` is the stable, tested explorer.
+- `master` is the stable, tested explorer and deploys automatically to GitHub Pages.
 - `full-system-modeling` is the integration branch for the next model revision.
 - The integration branch returns to `master` only after the web UI, TypeScript
   model, Python model, lint checks, and both test suites pass.
@@ -29,6 +31,12 @@ HBM, SRAM, NoC, and compute overlap; multicast and multiple TPU cores/MXUs;
 tile pipeline overlap; compiler transformations and fusion; host and launch
 overhead; and energy/power estimates. These are analytical approximations, not
 cycle-accurate TPU claims, and each coefficient will remain visible in the UI.
+
+## GitHub Pages
+
+Every push to `master` runs `.github/workflows/pages.yml`, creates a static
+Next.js export, and publishes it through GitHub Pages. The project base path is
+applied only in GitHub Actions, so local development remains at `/`.
 
 ## Interactive UI
 
