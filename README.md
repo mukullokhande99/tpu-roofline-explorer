@@ -4,8 +4,6 @@ An interactive, SRAM-aware roofline model for TPU-style systolic accelerators.
 The project combines a browser-based architecture workbench with a reusable
 Python CLI model.
 
-**Live explorer:** https://mukullokhande99.github.io/tpu-roofline-explorer/
-
 ## What it models
 
 - GEMM operation count for `C[M,N] = A[M,K] @ B[K,N]`
@@ -18,12 +16,12 @@ Python CLI model.
 
 ## Development branches
 
-- `master` is the stable, tested explorer and deploys automatically to GitHub Pages.
-- `full-system-modeling` is the integration branch for the next model revision.
+- `master` is the stable, tested explorer.
+- `full-system-modeling` is the integration branch for the expanded model.
 - The integration branch returns to `master` only after the web UI, TypeScript
   model, Python model, lint checks, and both test suites pass.
 
-The full-system revision is planned to add independent activation, weight,
+The full-system branch adds independent activation, weight,
 output, and accumulator precision; a four-stage Posit/FP MAC pipeline
 (decode, multiply, accumulate, encode) with quire finalization cost; 64 KiB
 SRAM banking and explicit A/B/C allocation; loop-order and dataflow controls;
@@ -32,17 +30,14 @@ tile pipeline overlap; compiler transformations and fusion; host and launch
 overhead; and energy/power estimates. These are analytical approximations, not
 cycle-accurate TPU claims, and each coefficient will remain visible in the UI.
 
-## GitHub Pages
-
-Every push to `master` runs `.github/workflows/pages.yml`, creates a static
-Next.js export, and publishes it through GitHub Pages. The project base path is
-applied only in GitHub Actions, so local development remains at `/`.
-
 ## Interactive UI
 
-The interface exposes architecture and workload presets plus editable controls
-for peak TOPS, HBM bandwidth, SRAM capacity, matrix dimensions, MXU dimensions,
-reuse factors, and precision. The roofline graph and all metrics update live.
+The interface exposes architecture and workload presets plus independent
+activation/weight/output/accumulator precision; MXU/core counts; 64 KiB SRAM
+banking and A/B/C allocation; HBM/SRAM/NoC efficiency; multicast; loop order,
+dataflow, fusion, compiler, tile-overlap, and host controls; plus energy
+coefficients. The roofline graph and latency, traffic, pipeline, utilization,
+and energy breakdowns update live.
 
 ```bash
 npm ci
@@ -92,15 +87,20 @@ python roofline.py \
 ```text
 Operations = 2*M*N*K
 Arithmetic intensity = operations / estimated HBM bytes
-Compute latency = operations / (peak compute * MXU utilization)
-HBM latency = estimated HBM bytes / HBM bandwidth
-Estimated latency = max(compute latency, HBM latency)
+Compute latency = operations / (MXU peak * workers * utilization * compiler efficiency)
+Resource latency = compute, HBM, SRAM, or NoC bytes / effective bandwidth
+Device latency = max(resources) + (1 - overlap) * (sum(resources) - max(resources))
+End-to-end latency = device latency + host overhead + kernels * launch overhead
+Energy = compute + HBM + SRAM + NoC dynamic energy + static power * latency
 ```
 
-The `max` latency is a lower-bound roofline estimate that assumes perfect
-compute/HBM overlap. SRAM residency is a transparent capacity heuristic rather
-than a cache simulator. See `docs/PORTFOLIO_NOTES.md` for interpretation and
-limitations.
+At 100% overlap the device equation becomes the normal roofline maximum. Posit
+and floating-point MACs use a four-stage Decode → Multiply → Accumulate → Encode
+pipeline whose stages affect tile fill/drain, not steady-state issue rate.
+Quire accumulation adds finalization cycles. SRAM residency, reuse/dataflow,
+spill, compiler, and energy terms are transparent heuristics rather than a
+cycle-accurate TPU simulator. See `docs/PORTFOLIO_NOTES.md` for interpretation
+and limitations.
 
 ## Repository structure
 
