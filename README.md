@@ -4,6 +4,13 @@ An interactive, SRAM-aware roofline model for TPU-style systolic accelerators.
 The project combines a browser-based architecture workbench with a reusable
 Python CLI model.
 
+**Live site:** https://mukullokhande99.github.io/tpu-roofline-explorer/
+
+## Assignments
+
+- **Assignment 1 · TPU Roofline Explorer:** the full-system analytical roofline workbench.
+- **Assignment 2 · Flex-PE Research Explorer:** an interactive Flex-PE-to-TPU design-space study at [\`/assignment-2/\`](https://mukullokhande99.github.io/tpu-roofline-explorer/assignment-2/), grounded in the [IEEE TVLSI paper](https://doi.org/10.1109/TVLSI.2025.3553069).
+
 ## What it models
 
 - GEMM operation count for `C[M,N] = A[M,K] @ B[K,N]`
