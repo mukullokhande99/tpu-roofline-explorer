@@ -287,6 +287,29 @@ button, input { font: inherit; }
 .method-step strong { font-size: 0.76rem; }
 .method-step p { margin: 0; color: var(--muted-foreground); font-size: 0.7rem; line-height: 1.45; }
 
+.workload-catalog-card { margin-bottom: 16px; }
+.workload-catalog { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; }
+.workload-catalog-item { display: grid; align-content: start; gap: 5px; min-height: 96px; padding: 12px; border: 1px solid var(--border); border-radius: 0.5rem; background: rgba(3, 8, 16, 0.34); color: var(--foreground); text-align: left; cursor: pointer; transition: border-color 160ms ease, background 160ms ease, transform 160ms ease; }
+.workload-catalog-item:hover { transform: translateY(-1px); border-color: color-mix(in srgb, var(--cyan) 45%, var(--border)); background: rgba(94, 231, 245, 0.06); }
+.workload-catalog-item.is-active { border-color: color-mix(in srgb, var(--cyan) 72%, var(--border)); background: linear-gradient(135deg, rgba(94, 231, 245, 0.12), rgba(155, 140, 255, 0.07)); box-shadow: inset 0 0 0 1px rgba(94, 231, 245, 0.1); }
+.workload-catalog-item strong { margin-top: 2px; font-size: 0.76rem; font-weight: 600; }
+.workload-catalog-item small { color: var(--muted-foreground); font-size: 0.66rem; }
+.workload-catalog-note { margin-top: 14px !important; }
+.evidence-badge { width: fit-content; padding: 3px 6px; border: 1px solid var(--border); border-radius: 99px; color: #b9cad6; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.56rem; font-weight: 600; letter-spacing: 0.05em; line-height: 1.2; text-transform: uppercase; }
+.evidence-paper-characterized { border-color: color-mix(in srgb, var(--cyan) 48%, var(--border)); color: var(--cyan); background: rgba(94, 231, 245, 0.07); }
+.evidence-accuracy-validation { border-color: color-mix(in srgb, var(--violet) 48%, var(--border)); color: #bcb1ff; background: rgba(155, 140, 255, 0.07); }
+.evidence-data-movement-study { border-color: color-mix(in srgb, var(--amber) 48%, var(--border)); color: var(--amber); background: rgba(242, 186, 91, 0.07); }
+.evidence-supported-scenario { color: #a9bac7; }
+.evidence-analytical-baseline { color: var(--muted-foreground); }
+.workload-evidence-card { gap: 0; padding: 0; overflow: hidden; border-color: color-mix(in srgb, var(--cyan) 28%, var(--border)) !important; }
+.workload-evidence-card [data-slot="card-header"] { display: flex; align-items: end; justify-content: space-between; gap: 14px; padding: 16px 18px 12px; border-bottom: 1px solid var(--border); }
+.workload-evidence-card [data-slot="card-title"] { margin-top: 4px; font-size: 1rem; font-weight: 550; }
+.workload-evidence-card [data-slot="card-content"] { padding: 15px 18px 17px; }
+.workload-evidence-card [data-slot="card-content"] > p { margin: 0; color: #b9cad6; font-size: 0.75rem; line-height: 1.55; }
+.workload-config-row { display: flex; justify-content: space-between; gap: 16px; margin: 12px 0 9px; padding: 9px 10px; border: 1px solid color-mix(in srgb, var(--border) 70%, transparent); border-radius: 0.4rem; background: rgba(3, 8, 16, 0.35); color: var(--muted-foreground); font-size: 0.68rem; }
+.workload-config-row strong { color: var(--foreground); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 500; text-align: right; }
+.workload-evidence-card .proxy-note { color: var(--muted-foreground) !important; font-size: 0.64rem !important; }
+
 .assignment-nav {
   display: flex;
   align-items: stretch;
@@ -399,6 +422,7 @@ button, input { font: inherit; }
 
 @media (max-width: 1120px) {
   .metric-grid { grid-template-columns: 1fr 1fr; }
+  .workload-catalog { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
 @media (max-width: 840px) {
@@ -409,6 +433,7 @@ button, input { font: inherit; }
   .assignment-tab { flex: 1; }
   .research-hero-grid, .research-grid, .research-results-grid { grid-template-columns: 1fr; }
   .methodology-strip { grid-template-columns: 1fr 1fr; }
+  .workload-catalog { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .explorer-grid { grid-template-columns: 1fr; }
   .controls-panel { position: static; }
   .control-stack { display: grid; grid-template-columns: 1fr 1fr; }
@@ -432,4 +457,7 @@ button, input { font: inherit; }
   .research-intro { padding: 18px; }
   .research-kicker { align-items: start; flex-direction: column; }
   .methodology-strip { grid-template-columns: 1fr; }
+  .workload-catalog { grid-template-columns: 1fr; }
+  .workload-catalog-item { min-height: 0; }
+  .workload-evidence-card [data-slot="card-header"], .workload-config-row { align-items: start; flex-direction: column; }
 }
