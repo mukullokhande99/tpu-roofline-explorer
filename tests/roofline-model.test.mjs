@@ -4,67 +4,28 @@ import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
-const vite = await createServer({
-  appType: "custom",
-  configFile: false,
-  root,
-  resolve: { alias: { "@": root } },
-  server: { middlewareMode: true },
-});
-
+const vite = await createServer({ appType: "custom", configFile: false, root, resolve: { alias: { "@": root } }, server: { middlewareMode: true } });
 after(async () => vite.close());
 
-test("matches the 256x256 single-token reference", async () => {
-  const { evaluateRoofline } = await vite.ssrLoadModule("/lib/roofline.ts");
-  const result = evaluateRoofline(
-    {
-      name: "B",
-      peakComputeTops: 131.072,
-      hbmBandwidthGbs: 900,
-      sramCapacityMib: 64,
-      mxuRows: 256,
-      mxuCols: 256,
-    },
-    {
-      name: "decode",
-      m: 1,
-      n: 11008,
-      k: 4096,
-      precision: "bf16",
-      weightReuseFactor: 8,
-      activationReuseFactor: 4,
-    },
-  );
+const architecture = { name: "test", peakComputeTopsPerMxu: 1, hbmBandwidthGbs: 100, hbmEfficiency: 0.8, sramBankCount: 4, sramBankBandwidthGbs: 10, sramEfficiency: 0.8, sramAllocationA: 40, sramAllocationB: 40, sramAllocationC: 20, mxuRows: 4, mxuCols: 4, coreCount: 1, mxusPerCore: 1, nocBandwidthGbs: 100, multicastFactor: 1, overlapEfficiency: 1, pipelineOverlap: 0, hostOverheadUs: 0, launchOverheadUs: 0, computeEnergyPjPerOp: 1, hbmEnergyPjPerByte: 1, sramEnergyPjPerByte: 1, nocEnergyPjPerByte: 1, staticPowerW: 0 };
+const workload = { name: "gemm", m: 8, n: 8, k: 4, activationPrecision: "bf16", weightPrecision: "int4", outputPrecision: "int8", accumulatorPrecision: "fp32", weightReuseFactor: 2, activationReuseFactor: 2, loopOrder: "m-n-k", dataflow: "output-stationary", fusionLevel: "none", compilerLevel: "tiled" };
 
-  assert.equal(result.tilesM, 1);
-  assert.equal(result.tilesN, 43);
-  assert.ok(Math.abs(result.mxuUtilization - 0.0034737299) < 1e-9);
-  assert.ok(Math.abs(result.estimatedLatencySeconds * 1e6 - 198.058) < 0.001);
-  assert.equal(result.effectiveWeightReuse, 1);
+test("models independent precision, bank capacity, and Posit pipeline", async () => {
+  const { evaluateRoofline } = await vite.ssrLoadModule("/lib/roofline.ts");
+  const result = evaluateRoofline(architecture, { ...workload, activationPrecision: "posit-(4,1)", accumulatorPrecision: "quire128" });
+  assert.equal(result.sramCapacityBytes, 4 * 64 * 1024);
+  assert.equal(result.pipelineDepth, 4);
+  assert.equal(result.quireFinalizeCycles, 2);
+  assert.ok(result.tileABytes < evaluateRoofline(architecture, workload).tileABytes);
 });
 
-test("more SRAM cannot reduce reuse", async () => {
+test("overlap, HBM efficiency, multicore NoC, and energy are explicit", async () => {
   const { evaluateRoofline } = await vite.ssrLoadModule("/lib/roofline.ts");
-  const workload = {
-    name: "square",
-    m: 4096,
-    n: 4096,
-    k: 4096,
-    precision: "bf16",
-    weightReuseFactor: 8,
-    activationReuseFactor: 4,
-  };
-  const base = {
-    name: "A",
-    peakComputeTops: 32.768,
-    hbmBandwidthGbs: 900,
-    mxuRows: 128,
-    mxuCols: 128,
-  };
-  const small = evaluateRoofline({ ...base, sramCapacityMib: 0.25 }, workload);
-  const large = evaluateRoofline({ ...base, sramCapacityMib: 64 }, workload);
-
-  assert.ok(large.effectiveWeightReuse >= small.effectiveWeightReuse);
-  assert.ok(large.effectiveActivationReuse >= small.effectiveActivationReuse);
-  assert.ok(large.bytesTransferred <= small.bytesTransferred);
+  const serial = evaluateRoofline({ ...architecture, overlapEfficiency: 0, coreCount: 4, mxusPerCore: 2, multicastFactor: 8 }, workload);
+  const overlapped = evaluateRoofline({ ...architecture, overlapEfficiency: 1, coreCount: 4, mxusPerCore: 2, multicastFactor: 8 }, workload);
+  assert.ok(serial.deviceLatencySeconds >= overlapped.deviceLatencySeconds);
+  assert.equal(overlapped.effectiveHbmBandwidthGbs, 80);
+  assert.ok(overlapped.nocTrafficBytes > 0);
+  assert.ok(overlapped.totalEnergyJ > 0);
+  assert.equal(overlapped.averagePowerW, overlapped.totalEnergyJ / overlapped.estimatedLatencySeconds);
 });
