@@ -1,1 +1,60 @@
-sed: can't read tests/roofline-model.test.mjs: No such file or directory
+import assert from "node:assert/strict";
+import test, { after } from "node:test";
+import { fileURLToPath } from "node:url";
+import { createServer } from "vite";
+
+const root = fileURLToPath(new URL("..", import.meta.url));
+const vite = await createServer({ appType: "custom", configFile: false, root, resolve: { alias: { "@": root } }, server: { middlewareMode: true } });
+after(async () => vite.close());
+
+const architecture = { name: "test", peakComputeTopsPerMxu: 1, hbmBandwidthGbs: 100, hbmEfficiency: 0.8, sramBankCount: 4, sramBankBandwidthGbs: 10, sramEfficiency: 0.8, sramAllocationA: 40, sramAllocationB: 40, sramAllocationC: 20, mxuRows: 4, mxuCols: 4, coreCount: 1, mxusPerCore: 1, nocBandwidthGbs: 100, multicastFactor: 1, overlapEfficiency: 1, pipelineOverlap: 0, hostOverheadUs: 0, launchOverheadUs: 0, computeEnergyPjPerOp: 1, hbmEnergyPjPerByte: 1, sramEnergyPjPerByte: 1, nocEnergyPjPerByte: 1, staticPowerW: 0 };
+const workload = { name: "gemm", m: 8, n: 8, k: 4, activationPrecision: "bf16", weightPrecision: "int4", outputPrecision: "int8", accumulatorPrecision: "fp32", weightReuseFactor: 2, activationReuseFactor: 2, loopOrder: "m-n-k", dataflow: "output-stationary", fusionLevel: "none", compilerLevel: "tiled" };
+
+test("models independent precision, bank capacity, and Posit pipeline", async () => {
+  const { evaluateRoofline } = await vite.ssrLoadModule("/lib/roofline.ts");
+  const result = evaluateRoofline(architecture, { ...workload, activationPrecision: "posit-(4,1)", accumulatorPrecision: "quire128" });
+  assert.equal(result.sramCapacityBytes, 4 * 64 * 1024);
+  assert.equal(result.pipelineDepth, 4);
+  assert.equal(result.quireFinalizeCycles, 2);
+  assert.ok(result.tileABytes < evaluateRoofline(architecture, workload).tileABytes);
+});
+
+test("overlap, HBM efficiency, multicore NoC, and energy are explicit", async () => {
+  const { evaluateRoofline } = await vite.ssrLoadModule("/lib/roofline.ts");
+  const serial = evaluateRoofline({ ...architecture, overlapEfficiency: 0, coreCount: 4, mxusPerCore: 2, multicastFactor: 8 }, workload);
+  const overlapped = evaluateRoofline({ ...architecture, overlapEfficiency: 1, coreCount: 4, mxusPerCore: 2, multicastFactor: 8 }, workload);
+  assert.ok(serial.deviceLatencySeconds >= overlapped.deviceLatencySeconds);
+  assert.equal(overlapped.effectiveHbmBandwidthGbs, 80);
+  assert.ok(overlapped.nocTrafficBytes > 0);
+  assert.ok(overlapped.totalEnergyJ > 0);
+  assert.equal(overlapped.averagePowerW, overlapped.totalEnergyJ / overlapped.estimatedLatencySeconds);
+});
+
+test("supports new formats, model-layer style workloads, and 5% pruning", async () => {
+  const { evaluateRoofline, STORAGE_BITS } = await vite.ssrLoadModule("/lib/roofline.ts");
+  for (const precision of ["posit-8", "posit-16", "mxfp4", "mxint8", "nvfp4"]) {
+    assert.ok(STORAGE_BITS[precision] > 0);
+  }
+  const dense = evaluateRoofline(architecture, { ...workload, name: "Qwen2.5 · mlp_up", pruningPercent: 0, weightPrecision: "mxfp4" });
+  const pruned = evaluateRoofline(architecture, { ...workload, pruningPercent: 50, weightPrecision: "mxfp4" });
+  assert.equal(pruned.pruningPercent, 50);
+  assert.equal(pruned.operations, dense.operations / 2);
+  assert.ok(pruned.weightReadBytes < dense.weightReadBytes);
+});
+
+test("models VXU lane waves separately from systolic MXU tiles", async () => {
+  const { evaluateRoofline } = await vite.ssrLoadModule("/lib/roofline.ts");
+  const vxu = evaluateRoofline(
+    { ...architecture, computeFabric: "vxu", vectorLanes: 256, mxuRows: 1, mxuCols: 256 },
+    { ...workload, m: 1, n: 1025, k: 4, pruningPercent: 0 },
+  );
+  const mxu = evaluateRoofline(
+    { ...architecture, computeFabric: "mxu", mxuRows: 32, mxuCols: 32 },
+    { ...workload, m: 1, n: 1025, k: 4, pruningPercent: 0 },
+  );
+  assert.equal(vxu.computeFabric, "vxu");
+  assert.equal(vxu.vectorLanes, 256);
+  assert.equal(vxu.vectorWaves, 5);
+  assert.equal(vxu.bottleneck === "VXU" || vxu.bottleneck !== "MXU", true);
+  assert.notEqual(vxu.cyclesPerTile, mxu.cyclesPerTile);
+});
