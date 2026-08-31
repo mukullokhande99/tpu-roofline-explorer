@@ -16,6 +16,7 @@ Python CLI model.
 - Runtime shape: custom GEMM, prefill, or decode with batch size, sequence length, generated decode tokens, and layer count
 - Configurable SRAM bank size plus single- or double-buffered capacity accounting
 - DVFS controls for frequency-scaled throughput and voltage-squared dynamic compute energy
+- PVT controls for SS/TT/FF process corners, −55°C to 150°C junction temperature, and 7/16/28/65 nm technology nodes
 - VXU register-file capacity, bandwidth, residency, and vector issue width
 - Accuracy–energy Pareto sweeps across precision and 0–100% pruning; accuracy is a user-calibrated proxy, not benchmark data
 

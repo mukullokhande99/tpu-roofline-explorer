@@ -25,7 +25,9 @@ import {
   type FusionLevel,
   type ExecutionPhase,
   type LoopOrder,
+  type ProcessCorner,
   type StoragePrecision,
+  type TechnologyNodeNm,
   type Workload,
   buildAccuracyEnergyPareto,
   evaluateRoofline,
@@ -304,18 +306,20 @@ function NumberField({
   value,
   onChange,
   step = 1,
+  min = 0,
 }: {
   label: string;
   value: number;
   onChange: (value: number) => void;
   step?: number;
+  min?: number;
 }) {
   return (
     <label className="control-field">
       <span>{label}</span>
       <Input
         type="number"
-        min={0}
+        min={min}
         step={step}
         value={value}
         onChange={(event) => onChange(Number(event.target.value))}
@@ -650,6 +654,27 @@ export function RooflineExplorer() {
       vectorLanes: lanes,
       mxuCols: lanes,
     }));
+  const applyPvtPreset = (preset: string) => {
+    const values: Record<string, { processCorner: ProcessCorner; temperatureC: number }> = {
+      tt25: { processCorner: "tt", temperatureC: 25 },
+      ss125: { processCorner: "ss", temperatureC: 125 },
+      ff40: { processCorner: "ff", temperatureC: -40 },
+      ff85: { processCorner: "ff", temperatureC: 85 },
+    };
+    if (values[preset]) {
+      setArchitecture((current) => ({ ...current, ...values[preset] }));
+    }
+  };
+  const pvtPreset =
+    architecture.processCorner === "tt" && (architecture.temperatureC ?? 25) === 25
+      ? "tt25"
+      : architecture.processCorner === "ss" && architecture.temperatureC === 125
+        ? "ss125"
+        : architecture.processCorner === "ff" && architecture.temperatureC === -40
+          ? "ff40"
+          : architecture.processCorner === "ff" && architecture.temperatureC === 85
+            ? "ff85"
+            : "custom";
   const updateWorkload = (
     field: keyof Workload,
     value: Workload[keyof Workload],
@@ -1197,14 +1222,56 @@ export function RooflineExplorer() {
                   </div>
                 </div>
                 <div className="control-section">
-                  <p className="section-label">DVFS operating point</p>
+                  <p className="section-label">DVFS and PVT operating point</p>
+                  <label className="control-field">
+                    <span>PVT preset</span>
+                    <Select value={pvtPreset} onValueChange={applyPvtPreset}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="tt25">TT @ 25°C</SelectItem>
+                        <SelectItem value="ss125">SS @ 125°C</SelectItem>
+                        <SelectItem value="ff40">FF @ −40°C</SelectItem>
+                        <SelectItem value="ff85">FF @ 85°C</SelectItem>
+                        <SelectItem value="custom">Custom PVT</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </label>
+                  <label className="control-field">
+                    <span>Technology node</span>
+                    <Select
+                      value={String(architecture.technologyNodeNm ?? 16)}
+                      onValueChange={(v) => updateArch("technologyNodeNm", Number(v) as TechnologyNodeNm)}
+                    >
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {[7, 16, 28, 65].map((node) => (
+                          <SelectItem key={node} value={String(node)}>{node} nm</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </label>
+                  <label className="control-field">
+                    <span>Process corner</span>
+                    <Select
+                      value={architecture.processCorner ?? "tt"}
+                      onValueChange={(v) => updateArch("processCorner", v as ProcessCorner)}
+                    >
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="ss">SS · slow-slow</SelectItem>
+                        <SelectItem value="tt">TT · typical-typical</SelectItem>
+                        <SelectItem value="ff">FF · fast-fast</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </label>
                   <div className="number-grid two">
                     <NumberField label="Frequency · GHz" value={architecture.frequencyGhz ?? 1} step={0.05} onChange={(v) => updateArch("frequencyGhz", v)} />
                     <NumberField label="Nominal frequency · GHz" value={architecture.nominalFrequencyGhz ?? 1} step={0.05} onChange={(v) => updateArch("nominalFrequencyGhz", v)} />
                     <NumberField label="Voltage · V" value={architecture.voltageV ?? 0.8} step={0.01} onChange={(v) => updateArch("voltageV", v)} />
                     <NumberField label="Nominal voltage · V" value={architecture.nominalVoltageV ?? 0.8} step={0.01} onChange={(v) => updateArch("nominalVoltageV", v)} />
+                    <NumberField label="Junction temperature · °C" value={architecture.temperatureC ?? 25} min={-55} step={5} onChange={(v) => updateArch("temperatureC", v)} />
                   </div>
-                  <p className="input-note">Throughput scales with frequency; dynamic compute energy scales with voltage squared.</p>
+                  <p className="input-note">Peak throughput is scaled by frequency, process corner, temperature, and node. Dynamic compute energy scales with voltage² and node; static power scales with corner and temperature-dependent leakage. Coefficients are analytical, relative to TT/25°C at 16 nm.</p>
                 </div>
                 <div className="control-section slider-stack">
                   <p className="section-label">NoC and overlap</p>
@@ -1430,7 +1497,8 @@ export function RooflineExplorer() {
                 value={`${workload.loopOrder} · ${workload.dataflow}`}
               />
               <Row label="Runtime shape" value={`${result.executionPhase} · M=${result.effectiveM} · ${result.invocationCount} invocation${result.invocationCount === 1 ? "" : "s"}`} />
-              <Row label="DVFS" value={`${result.frequencyGhz.toFixed(2)} GHz · ${result.voltageV.toFixed(2)} V`} />
+              <Row label="DVFS / PVT" value={`${result.frequencyGhz.toFixed(2)} GHz · ${result.voltageV.toFixed(2)} V · ${result.processCorner.toUpperCase()} @ ${result.temperatureC.toFixed(0)}°C · ${result.technologyNodeNm} nm`} />
+              <Row label="PVT frequency / leakage scale" value={`${(result.cornerFrequencyFactor * result.temperatureFrequencyFactor * result.nodeFrequencyFactor).toFixed(3)}× / ${result.leakageScale.toFixed(3)}×`} />
               {result.computeFabric === "vxu" && (
                 <Row label="VXU RF / issue" value={`${(result.registerFileResidency * 100).toFixed(0)}% resident · ${result.vectorIssueEfficiency.toFixed(2)}× issue`} />
               )}

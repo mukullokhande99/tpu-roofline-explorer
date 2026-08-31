@@ -81,6 +81,21 @@ test("models bank size, double buffering, and DVFS", async () => {
   assert.ok(turbo.computeEnergyJ > base.computeEnergyJ);
 });
 
+test("models process corner, temperature, and technology-node PVT scaling", async () => {
+  const { evaluateRoofline } = await vite.ssrLoadModule("/lib/roofline.ts");
+  const tt16 = evaluateRoofline({ ...architecture, processCorner: "tt", temperatureC: 25, technologyNodeNm: 16 }, workload);
+  const ssHot = evaluateRoofline({ ...architecture, processCorner: "ss", temperatureC: 125, technologyNodeNm: 16 }, workload);
+  const ffWarm = evaluateRoofline({ ...architecture, processCorner: "ff", temperatureC: 85, technologyNodeNm: 16 }, workload);
+  const tt7 = evaluateRoofline({ ...architecture, processCorner: "tt", temperatureC: 25, technologyNodeNm: 7 }, workload);
+  assert.ok(ssHot.totalPeakTops < tt16.totalPeakTops);
+  assert.ok(ssHot.leakageScale > tt16.leakageScale);
+  assert.ok(ffWarm.cornerFrequencyFactor > tt16.cornerFrequencyFactor);
+  assert.ok(tt7.totalPeakTops > tt16.totalPeakTops);
+  assert.ok(tt7.computeEnergyJ < tt16.computeEnergyJ);
+  assert.equal(ssHot.temperatureC, 125);
+  assert.equal(tt7.technologyNodeNm, 7);
+});
+
 test("applies VXU RF and issue constraints and emits a non-dominated Pareto frontier", async () => {
   const { evaluateRoofline, buildAccuracyEnergyPareto } = await vite.ssrLoadModule("/lib/roofline.ts");
   const constrained = evaluateRoofline({ ...architecture, computeFabric: "vxu", vectorLanes: 4096, vectorRegisterFileKib: 1, vectorRegisterBandwidthGbs: 0.001, vectorIssueWidth: 0.5 }, workload);

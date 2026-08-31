@@ -27,6 +27,8 @@ export type FusionLevel = "none" | "epilogue" | "aggressive";
 export type CompilerLevel = "basic" | "tiled" | "aggressive";
 export type ComputeFabric = "mxu" | "vxu";
 export type ExecutionPhase = "custom" | "prefill" | "decode";
+export type ProcessCorner = "ss" | "tt" | "ff";
+export type TechnologyNodeNm = 7 | 16 | 28 | 65;
 
 export type Architecture = {
   name: string;
@@ -62,6 +64,9 @@ export type Architecture = {
   nominalFrequencyGhz?: number;
   voltageV?: number;
   nominalVoltageV?: number;
+  processCorner?: ProcessCorner;
+  temperatureC?: number;
+  technologyNodeNm?: TechnologyNodeNm;
   vectorRegisterFileKib?: number;
   vectorRegisterBandwidthGbs?: number;
   vectorIssueWidth?: number;
@@ -168,6 +173,14 @@ export type RooflineResult = {
   frequencyGhz: number;
   voltageV: number;
   estimatedAccuracyPercent: number;
+  processCorner: ProcessCorner;
+  temperatureC: number;
+  technologyNodeNm: TechnologyNodeNm;
+  cornerFrequencyFactor: number;
+  temperatureFrequencyFactor: number;
+  nodeFrequencyFactor: number;
+  leakageScale: number;
+  nodeDynamicEnergyFactor: number;
 };
 
 export type AccuracyEnergyPoint = {
@@ -192,6 +205,25 @@ const FUSION: Record<FusionLevel, { outputFactor: number; kernels: number }> = {
   none: { outputFactor: 1, kernels: 3 },
   epilogue: { outputFactor: 0.75, kernels: 2 },
   aggressive: { outputFactor: 0.5, kernels: 1 },
+};
+
+const CORNER_FREQUENCY_FACTOR: Record<ProcessCorner, number> = {
+  ss: 0.82,
+  tt: 1,
+  ff: 1.12,
+};
+
+const CORNER_LEAKAGE_FACTOR: Record<ProcessCorner, number> = {
+  ss: 0.7,
+  tt: 1,
+  ff: 1.35,
+};
+
+const NODE_SCALING: Record<TechnologyNodeNm, { frequency: number; dynamicEnergy: number; leakage: number }> = {
+  7: { frequency: 1.35, dynamicEnergy: 0.55, leakage: 1.6 },
+  16: { frequency: 1, dynamicEnergy: 1, leakage: 1 },
+  28: { frequency: 0.75, dynamicEnergy: 1.65, leakage: 0.75 },
+  65: { frequency: 0.45, dynamicEnergy: 3.2, leakage: 0.45 },
 };
 
 function normalizeAllocations(a: number, b: number, c: number) {
@@ -235,6 +267,9 @@ export function evaluateRoofline(
     nominalFrequencyGhz: positive(architectureInput.nominalFrequencyGhz ?? 1),
     voltageV: positive(architectureInput.voltageV ?? 0.8),
     nominalVoltageV: positive(architectureInput.nominalVoltageV ?? 0.8),
+    processCorner: architectureInput.processCorner ?? "tt",
+    temperatureC: Math.min(150, Math.max(-55, architectureInput.temperatureC ?? 25)),
+    technologyNodeNm: architectureInput.technologyNodeNm ?? 16,
     vectorRegisterFileKib: positive(architectureInput.vectorRegisterFileKib ?? 256),
     vectorRegisterBandwidthGbs: positive(architectureInput.vectorRegisterBandwidthGbs ?? 2048),
     vectorIssueWidth: positive(architectureInput.vectorIssueWidth ?? 1),
@@ -333,7 +368,13 @@ export function evaluateRoofline(
   const mxuUtilization = Math.min(1, usefulMacs / scheduledMacSlots);
   const parallelUtilization = Math.min(1, outputTileCount / workers);
   const compilerEfficiency = COMPILER_EFFICIENCY[w.compilerLevel];
-  const frequencyScale = a.frequencyGhz / a.nominalFrequencyGhz;
+  const cornerFrequencyFactor = CORNER_FREQUENCY_FACTOR[a.processCorner];
+  const temperatureFrequencyFactor = Math.min(1.15, Math.max(0.7,
+    1 - 0.0015 * (a.temperatureC - 25)));
+  const nodeScaling = NODE_SCALING[a.technologyNodeNm];
+  const nodeFrequencyFactor = nodeScaling.frequency;
+  const frequencyScale = (a.frequencyGhz / a.nominalFrequencyGhz) *
+    cornerFrequencyFactor * temperatureFrequencyFactor * nodeFrequencyFactor;
   const vectorIssueEfficiency = a.computeFabric === "vxu" ? a.vectorIssueWidth : 1;
   const totalPeakTops = a.peakComputeTopsPerMxu * workers * frequencyScale * vectorIssueEfficiency;
   const effectiveComputeCeilingTops = totalPeakTops * compilerEfficiency;
@@ -383,11 +424,17 @@ export function evaluateRoofline(
   const bottleneck = bottleneckNames[resourceTimes.indexOf(dominantTime)];
 
   const voltageScaleSquared = (a.voltageV / a.nominalVoltageV) ** 2;
-  const computeEnergyJ = operations * Math.max(0, a.computeEnergyPjPerOp) * voltageScaleSquared * 1e-12;
+  const nodeDynamicEnergyFactor = nodeScaling.dynamicEnergy;
+  const computeEnergyJ = operations * Math.max(0, a.computeEnergyPjPerOp) *
+    voltageScaleSquared * nodeDynamicEnergyFactor * 1e-12;
   const hbmEnergyJ = bytesTransferred * Math.max(0, a.hbmEnergyPjPerByte) * 1e-12;
   const sramEnergyJ = sramTrafficBytes * Math.max(0, a.sramEnergyPjPerByte) * 1e-12;
   const nocEnergyJ = nocTrafficBytes * Math.max(0, a.nocEnergyPjPerByte) * 1e-12;
-  const staticEnergyJ = Math.max(0, a.staticPowerW) * (a.voltageV / a.nominalVoltageV) * estimatedLatencySeconds;
+  const temperatureLeakageFactor = 2 ** ((a.temperatureC - 25) / 35);
+  const leakageScale = CORNER_LEAKAGE_FACTOR[a.processCorner] *
+    temperatureLeakageFactor * nodeScaling.leakage;
+  const staticEnergyJ = Math.max(0, a.staticPowerW) *
+    (a.voltageV / a.nominalVoltageV) * leakageScale * estimatedLatencySeconds;
   const totalEnergyJ = computeEnergyJ + hbmEnergyJ + sramEnergyJ + nocEnergyJ + staticEnergyJ;
   const precisionBits = Math.min(STORAGE_BITS[w.activationPrecision], STORAGE_BITS[w.weightPrecision]);
   const precisionLoss = Math.max(0, workloadInput.precisionSensitivity ?? 2) *
@@ -471,6 +518,14 @@ export function evaluateRoofline(
     frequencyGhz: a.frequencyGhz,
     voltageV: a.voltageV,
     estimatedAccuracyPercent,
+    processCorner: a.processCorner,
+    temperatureC: a.temperatureC,
+    technologyNodeNm: a.technologyNodeNm,
+    cornerFrequencyFactor,
+    temperatureFrequencyFactor,
+    nodeFrequencyFactor,
+    leakageScale,
+    nodeDynamicEnergyFactor,
   };
 }
 
