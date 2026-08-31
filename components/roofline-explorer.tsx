@@ -23,9 +23,11 @@ import {
   type ComputeFabric,
   type Dataflow,
   type FusionLevel,
+  type ExecutionPhase,
   type LoopOrder,
   type StoragePrecision,
   type Workload,
+  buildAccuracyEnergyPareto,
   evaluateRoofline,
   formatBytes,
   formatEnergy,
@@ -602,12 +604,28 @@ export function RooflineExplorer() {
     fusionLevel: "epilogue",
     compilerLevel: "tiled",
     pruningPercent: 0,
+    executionPhase: "custom",
+    batchSize: 1,
+    sequenceLength: 4096,
+    decodeTokens: 1,
+    layerCount: 1,
+    baselineAccuracyPercent: 75,
+    precisionSensitivity: 2,
+    pruningSensitivity: 12,
+    pruningExponent: 1.5,
   });
   const result = useMemo(
     () => evaluateRoofline(architecture, workload),
     [architecture, workload],
   );
-  const updateArch = (field: keyof Architecture, value: number) =>
+  const pareto = useMemo(
+    () => buildAccuracyEnergyPareto(architecture, workload),
+    [architecture, workload],
+  );
+  const updateArch = (
+    field: keyof Architecture,
+    value: Architecture[keyof Architecture],
+  ) =>
     setArchitecture(
       (current) => ({ ...current, [field]: value }) as Architecture,
     );
@@ -808,6 +826,29 @@ export function RooflineExplorer() {
                       onChange={(v) => updateWorkload("k", v)}
                     />
                   </div>
+                  <label className="control-field">
+                    <span>Execution phase</span>
+                    <Select
+                      value={workload.executionPhase ?? "custom"}
+                      onValueChange={(v) => updateWorkload("executionPhase", v as ExecutionPhase)}
+                    >
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="custom">Custom GEMM · use M</SelectItem>
+                        <SelectItem value="prefill">Prefill · M = batch × sequence</SelectItem>
+                        <SelectItem value="decode">Decode · M = batch</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </label>
+                  <div className="number-grid two">
+                    <NumberField label="Batch" value={workload.batchSize ?? 1} onChange={(v) => updateWorkload("batchSize", v)} />
+                    <NumberField label="Sequence length" value={workload.sequenceLength ?? workload.m} onChange={(v) => updateWorkload("sequenceLength", v)} />
+                    <NumberField label="Layer count" value={workload.layerCount ?? 1} onChange={(v) => updateWorkload("layerCount", v)} />
+                    <NumberField label="Decode tokens" value={workload.decodeTokens ?? 1} onChange={(v) => updateWorkload("decodeTokens", v)} />
+                  </div>
+                  <p className="input-note">
+                    Custom preserves the original M knob. Prefill and decode derive M and scale totals across layers and generated tokens.
+                  </p>
                 </div>
                 <div className="control-section">
                   <p className="section-label">Independent precisions</p>
@@ -1004,11 +1045,29 @@ export function RooflineExplorer() {
                       onChange={(v) => updateArch("sramBankCount", v)}
                     />
                     <NumberField
+                      label="Bank size · KiB"
+                      value={architecture.sramBankSizeKib ?? 64}
+                      onChange={(v) => updateArch("sramBankSizeKib", v)}
+                    />
+                    <NumberField
                       label="GB/s per bank"
                       value={architecture.sramBankBandwidthGbs}
                       onChange={(v) => updateArch("sramBankBandwidthGbs", v)}
                     />
                   </div>
+                  <label className="control-field">
+                    <span>Buffering</span>
+                    <Select
+                      value={(architecture.doubleBuffering ?? false) ? "double" : "single"}
+                      onValueChange={(v) => updateArch("doubleBuffering", v === "double")}
+                    >
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="single">Single buffer</SelectItem>
+                        <SelectItem value="double">Double buffer · ping-pong</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </label>
                   <SliderField
                     label="SRAM efficiency"
                     value={Math.round(architecture.sramEfficiency * 100)}
@@ -1019,8 +1078,7 @@ export function RooflineExplorer() {
                     onChange={(v) => updateArch("sramEfficiency", v / 100)}
                   />
                   <p className="input-note">
-                    Every bank is 64 KiB. Change bank count to model 64/128/256
-                    KiB multiples.
+                    Bank size is independently configurable. Double buffering reserves half the capacity for the next tile.
                   </p>
                 </div>
                 <div className="control-section slider-stack">
@@ -1103,11 +1161,14 @@ export function RooflineExplorer() {
                     onChange={(v) => updateArch("peakComputeTopsPerMxu", v)}
                   />
                   {architecture.computeFabric === "vxu" ? (
-                    <NumberField
-                      label="Vector lanes"
-                      value={architecture.vectorLanes ?? architecture.mxuCols}
-                      onChange={updateVectorLanes}
-                    />
+                    <>
+                      <NumberField label="Vector lanes" value={architecture.vectorLanes ?? architecture.mxuCols} onChange={updateVectorLanes} />
+                      <div className="number-grid two">
+                        <NumberField label="RF capacity · KiB" value={architecture.vectorRegisterFileKib ?? 256} onChange={(v) => updateArch("vectorRegisterFileKib", v)} />
+                        <NumberField label="RF bandwidth · GB/s" value={architecture.vectorRegisterBandwidthGbs ?? 2048} onChange={(v) => updateArch("vectorRegisterBandwidthGbs", v)} />
+                        <NumberField label="Vector issue width" value={architecture.vectorIssueWidth ?? 1} step={0.25} onChange={(v) => updateArch("vectorIssueWidth", v)} />
+                      </div>
+                    </>
                   ) : (
                     <div className="number-grid two">
                       <NumberField
@@ -1134,6 +1195,16 @@ export function RooflineExplorer() {
                       onChange={(v) => updateArch("mxusPerCore", v)}
                     />
                   </div>
+                </div>
+                <div className="control-section">
+                  <p className="section-label">DVFS operating point</p>
+                  <div className="number-grid two">
+                    <NumberField label="Frequency · GHz" value={architecture.frequencyGhz ?? 1} step={0.05} onChange={(v) => updateArch("frequencyGhz", v)} />
+                    <NumberField label="Nominal frequency · GHz" value={architecture.nominalFrequencyGhz ?? 1} step={0.05} onChange={(v) => updateArch("nominalFrequencyGhz", v)} />
+                    <NumberField label="Voltage · V" value={architecture.voltageV ?? 0.8} step={0.01} onChange={(v) => updateArch("voltageV", v)} />
+                    <NumberField label="Nominal voltage · V" value={architecture.nominalVoltageV ?? 0.8} step={0.01} onChange={(v) => updateArch("nominalVoltageV", v)} />
+                  </div>
+                  <p className="input-note">Throughput scales with frequency; dynamic compute energy scales with voltage squared.</p>
                 </div>
                 <div className="control-section slider-stack">
                   <p className="section-label">NoC and overlap</p>
@@ -1230,6 +1301,16 @@ export function RooflineExplorer() {
                     static energy is power × total latency.
                   </p>
                 </div>
+                <div className="control-section">
+                  <p className="section-label">Accuracy proxy calibration</p>
+                  <div className="number-grid two">
+                    <NumberField label="Baseline score · %" value={workload.baselineAccuracyPercent ?? 75} step={0.1} onChange={(v) => updateWorkload("baselineAccuracyPercent", v)} />
+                    <NumberField label="Precision sensitivity" value={workload.precisionSensitivity ?? 2} step={0.1} onChange={(v) => updateWorkload("precisionSensitivity", v)} />
+                    <NumberField label="Pruning sensitivity" value={workload.pruningSensitivity ?? 12} step={0.1} onChange={(v) => updateWorkload("pruningSensitivity", v)} />
+                    <NumberField label="Pruning exponent" value={workload.pruningExponent ?? 1.5} step={0.1} onChange={(v) => updateWorkload("pruningExponent", v)} />
+                  </div>
+                  <p className="input-note">This is a user-calibrated analytical score, not measured benchmark accuracy.</p>
+                </div>
               </TabsContent>
             </Tabs>
           </CardContent>
@@ -1290,7 +1371,7 @@ export function RooflineExplorer() {
               />
               <Row
                 label="SRAM capacity / bandwidth"
-                value={`${formatBytes(result.sramCapacityBytes)} · ${result.sramBandwidthGbs.toFixed(0)} GB/s`}
+                value={`${formatBytes(result.usableSramCapacityBytes)} usable / ${formatBytes(result.sramCapacityBytes)} raw · ${result.sramBandwidthGbs.toFixed(0)} GB/s`}
               />
               <Row
                 label="A / B / C residency"
@@ -1319,8 +1400,8 @@ export function RooflineExplorer() {
                 value={result.cyclesPerTile.toFixed(1)}
               />
               <Row
-                label="Compute / HBM / SRAM / NoC"
-                value={`${formatLatency(result.computeLatencySeconds)} / ${formatLatency(result.hbmLatencySeconds)} / ${formatLatency(result.sramLatencySeconds)} / ${formatLatency(result.nocLatencySeconds)}`}
+                label="Compute / HBM / SRAM / NoC / RF"
+                value={`${formatLatency(result.computeLatencySeconds)} / ${formatLatency(result.hbmLatencySeconds)} / ${formatLatency(result.sramLatencySeconds)} / ${formatLatency(result.nocLatencySeconds)} / ${formatLatency(result.registerFileLatencySeconds)}`}
               />
               <Row
                 label="Device + host / launch"
@@ -1348,10 +1429,22 @@ export function RooflineExplorer() {
                 label="Loop / dataflow"
                 value={`${workload.loopOrder} · ${workload.dataflow}`}
               />
+              <Row label="Runtime shape" value={`${result.executionPhase} · M=${result.effectiveM} · ${result.invocationCount} invocation${result.invocationCount === 1 ? "" : "s"}`} />
+              <Row label="DVFS" value={`${result.frequencyGhz.toFixed(2)} GHz · ${result.voltageV.toFixed(2)} V`} />
+              {result.computeFabric === "vxu" && (
+                <Row label="VXU RF / issue" value={`${(result.registerFileResidency * 100).toFixed(0)}% resident · ${result.vectorIssueEfficiency.toFixed(2)}× issue`} />
+              )}
               <Row
                 label="NoC multicast traffic"
                 value={formatBytes(result.nocTrafficBytes)}
               />
+            </DetailCard>
+            <DetailCard title="Accuracy–energy Pareto">
+              <Row label="Current estimated score" value={`${result.estimatedAccuracyPercent.toFixed(2)}%`} />
+              {pareto.filter((_, index) => index === 0 || index === pareto.length - 1 || index % Math.max(1, Math.floor(pareto.length / 4)) === 0).slice(0, 6).map((point) => (
+                <Row key={`${point.precision}-${point.pruningPercent}`} label={`${point.precision} · ${point.pruningPercent}% pruned`} value={`${point.estimatedAccuracyPercent.toFixed(1)}% · ${formatEnergy(point.totalEnergyJ)}`} />
+              ))}
+              <p className="input-note">Non-dominated sweep: maximize calibrated score while minimizing modeled energy.</p>
             </DetailCard>
             <DetailCard title="Energy accounting">
               <Row

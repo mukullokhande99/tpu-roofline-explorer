@@ -26,6 +26,7 @@ export type Dataflow = "output-stationary" | "weight-stationary" | "activation-s
 export type FusionLevel = "none" | "epilogue" | "aggressive";
 export type CompilerLevel = "basic" | "tiled" | "aggressive";
 export type ComputeFabric = "mxu" | "vxu";
+export type ExecutionPhase = "custom" | "prefill" | "decode";
 
 export type Architecture = {
   name: string;
@@ -35,6 +36,8 @@ export type Architecture = {
   hbmBandwidthGbs: number;
   hbmEfficiency: number;
   sramBankCount: number;
+  sramBankSizeKib?: number;
+  doubleBuffering?: boolean;
   sramBankBandwidthGbs: number;
   sramEfficiency: number;
   sramAllocationA: number;
@@ -55,6 +58,13 @@ export type Architecture = {
   sramEnergyPjPerByte: number;
   nocEnergyPjPerByte: number;
   staticPowerW: number;
+  frequencyGhz?: number;
+  nominalFrequencyGhz?: number;
+  voltageV?: number;
+  nominalVoltageV?: number;
+  vectorRegisterFileKib?: number;
+  vectorRegisterBandwidthGbs?: number;
+  vectorIssueWidth?: number;
 };
 
 export type Workload = {
@@ -73,6 +83,15 @@ export type Workload = {
   fusionLevel: FusionLevel;
   compilerLevel: CompilerLevel;
   pruningPercent: number;
+  executionPhase?: ExecutionPhase;
+  batchSize?: number;
+  sequenceLength?: number;
+  decodeTokens?: number;
+  layerCount?: number;
+  baselineAccuracyPercent?: number;
+  precisionSensitivity?: number;
+  pruningSensitivity?: number;
+  pruningExponent?: number;
 };
 
 export type RooflineResult = {
@@ -87,11 +106,12 @@ export type RooflineResult = {
   hbmLatencySeconds: number;
   sramLatencySeconds: number;
   nocLatencySeconds: number;
+  registerFileLatencySeconds: number;
   deviceLatencySeconds: number;
   hostLatencySeconds: number;
   estimatedLatencySeconds: number;
   estimatedPerformanceTops: number;
-  bottleneck: "MXU" | "VXU" | "HBM" | "SRAM" | "NoC";
+  bottleneck: "MXU" | "VXU" | "HBM" | "SRAM" | "NoC" | "RF";
   computeFabric: ComputeFabric;
   vectorLanes: number;
   vectorWaves: number;
@@ -103,6 +123,9 @@ export type RooflineResult = {
   quireFinalizeCycles: number;
   cyclesPerTile: number;
   sramCapacityBytes: number;
+  usableSramCapacityBytes: number;
+  sramBankSizeKib: number;
+  doubleBuffering: boolean;
   sramBandwidthGbs: number;
   allocationABytes: number;
   allocationBBytes: number;
@@ -121,6 +144,9 @@ export type RooflineResult = {
   cSpillBytes: number;
   sramTrafficBytes: number;
   nocTrafficBytes: number;
+  registerFileTrafficBytes: number;
+  registerFileResidency: number;
+  vectorIssueEfficiency: number;
   effectiveHbmBandwidthGbs: number;
   totalPeakTops: number;
   effectiveComputeCeilingTops: number;
@@ -135,6 +161,21 @@ export type RooflineResult = {
   staticEnergyJ: number;
   totalEnergyJ: number;
   averagePowerW: number;
+  executionPhase: ExecutionPhase;
+  effectiveM: number;
+  invocationCount: number;
+  layerCount: number;
+  frequencyGhz: number;
+  voltageV: number;
+  estimatedAccuracyPercent: number;
+};
+
+export type AccuracyEnergyPoint = {
+  precision: StoragePrecision;
+  pruningPercent: number;
+  estimatedAccuracyPercent: number;
+  totalEnergyJ: number;
+  estimatedLatencySeconds: number;
 };
 
 const positive = (value: number, fallback = 1) =>
@@ -173,6 +214,8 @@ export function evaluateRoofline(
     hbmBandwidthGbs: positive(architectureInput.hbmBandwidthGbs),
     hbmEfficiency: clamp01(architectureInput.hbmEfficiency),
     sramBankCount: Math.max(1, Math.round(positive(architectureInput.sramBankCount))),
+    sramBankSizeKib: positive(architectureInput.sramBankSizeKib ?? 64),
+    doubleBuffering: architectureInput.doubleBuffering ?? false,
     sramBankBandwidthGbs: positive(architectureInput.sramBankBandwidthGbs),
     sramEfficiency: clamp01(architectureInput.sramEfficiency),
     mxuRows: Math.max(1, Math.round(positive(architectureInput.mxuRows))),
@@ -188,10 +231,28 @@ export function evaluateRoofline(
     multicastFactor: positive(architectureInput.multicastFactor),
     overlapEfficiency: clamp01(architectureInput.overlapEfficiency),
     pipelineOverlap: clamp01(architectureInput.pipelineOverlap),
+    frequencyGhz: positive(architectureInput.frequencyGhz ?? 1),
+    nominalFrequencyGhz: positive(architectureInput.nominalFrequencyGhz ?? 1),
+    voltageV: positive(architectureInput.voltageV ?? 0.8),
+    nominalVoltageV: positive(architectureInput.nominalVoltageV ?? 0.8),
+    vectorRegisterFileKib: positive(architectureInput.vectorRegisterFileKib ?? 256),
+    vectorRegisterBandwidthGbs: positive(architectureInput.vectorRegisterBandwidthGbs ?? 2048),
+    vectorIssueWidth: positive(architectureInput.vectorIssueWidth ?? 1),
   };
+  const executionPhase = workloadInput.executionPhase ?? "custom";
+  const batchSize = Math.max(1, Math.round(positive(workloadInput.batchSize ?? 1)));
+  const sequenceLength = Math.max(1, Math.round(positive(workloadInput.sequenceLength ?? workloadInput.m)));
+  const decodeTokens = Math.max(1, Math.round(positive(workloadInput.decodeTokens ?? 1)));
+  const layerCount = Math.max(1, Math.round(positive(workloadInput.layerCount ?? 1)));
+  const effectiveM = executionPhase === "prefill"
+    ? batchSize * sequenceLength
+    : executionPhase === "decode"
+      ? batchSize
+      : Math.max(1, Math.round(positive(workloadInput.m)));
+  const invocationCount = layerCount * (executionPhase === "decode" ? decodeTokens : 1);
   const w = {
     ...workloadInput,
-    m: Math.max(1, Math.round(positive(workloadInput.m))),
+    m: effectiveM,
     n: Math.max(1, Math.round(positive(workloadInput.n))),
     k: Math.max(1, Math.round(positive(workloadInput.k))),
     weightReuseFactor: positive(workloadInput.weightReuseFactor),
@@ -215,15 +276,16 @@ export function evaluateRoofline(
   const tileABytes = tileM * w.k * activationBytes;
   const tileBBytes = w.k * tileN * weightBytes;
   const tileCBytes = tileM * tileN * accumulatorBytes;
-  const sramCapacityBytes = a.sramBankCount * 64 * 1024;
+  const sramCapacityBytes = a.sramBankCount * a.sramBankSizeKib * 1024;
+  const usableSramCapacityBytes = sramCapacityBytes / (a.doubleBuffering ? 2 : 1);
   const [fractionA, fractionB, fractionC] = normalizeAllocations(
     architectureInput.sramAllocationA,
     architectureInput.sramAllocationB,
     architectureInput.sramAllocationC,
   );
-  const allocationABytes = sramCapacityBytes * fractionA;
-  const allocationBBytes = sramCapacityBytes * fractionB;
-  const allocationCBytes = sramCapacityBytes * fractionC;
+  const allocationABytes = usableSramCapacityBytes * fractionA;
+  const allocationBBytes = usableSramCapacityBytes * fractionB;
+  const allocationCBytes = usableSramCapacityBytes * fractionC;
   const residencyA = Math.min(1, allocationABytes / positive(tileABytes));
   const residencyB = Math.min(1, allocationBBytes / positive(tileBBytes));
   const residencyC = Math.min(1, allocationCBytes / positive(tileCBytes));
@@ -240,16 +302,16 @@ export function evaluateRoofline(
   const activationCompulsory = w.m * w.k * activationBytes;
   const density = 1 - w.pruningPercent / 100;
   const weightCompulsory = w.k * w.n * weightBytes * density;
-  const activationReadBytes = Math.max(activationCompulsory, activationCompulsory * tilesN / effectiveActivationReuse);
-  const weightReadBytes = Math.max(weightCompulsory, weightCompulsory * tilesM / effectiveWeightReuse);
+  const activationReadBytes = Math.max(activationCompulsory, activationCompulsory * tilesN / effectiveActivationReuse) * invocationCount;
+  const weightReadBytes = Math.max(weightCompulsory, weightCompulsory * tilesM / effectiveWeightReuse) * invocationCount;
   const fusion = FUSION[w.fusionLevel];
-  const outputBytes = w.m * w.n * outputValueBytes * fusion.outputFactor;
+  const outputBytes = w.m * w.n * outputValueBytes * fusion.outputFactor * invocationCount;
   const cSpillMultiplier =
     (w.dataflow === "output-stationary" ? 0.1 : 0.5) +
     (w.loopOrder === "k-m-n" ? 1 : 0);
-  const cSpillBytes = 2 * w.m * w.n * accumulatorBytes * (1 - residencyC) * cSpillMultiplier;
+  const cSpillBytes = 2 * w.m * w.n * accumulatorBytes * (1 - residencyC) * cSpillMultiplier * invocationCount;
   const bytesTransferred = activationReadBytes + weightReadBytes + outputBytes + cSpillBytes;
-  const denseOperations = 2 * w.m * w.n * w.k;
+  const denseOperations = 2 * w.m * w.n * w.k * invocationCount;
   const operations = denseOperations * density;
   const arithmeticIntensity = operations / bytesTransferred;
 
@@ -271,7 +333,9 @@ export function evaluateRoofline(
   const mxuUtilization = Math.min(1, usefulMacs / scheduledMacSlots);
   const parallelUtilization = Math.min(1, outputTileCount / workers);
   const compilerEfficiency = COMPILER_EFFICIENCY[w.compilerLevel];
-  const totalPeakTops = a.peakComputeTopsPerMxu * workers;
+  const frequencyScale = a.frequencyGhz / a.nominalFrequencyGhz;
+  const vectorIssueEfficiency = a.computeFabric === "vxu" ? a.vectorIssueWidth : 1;
+  const totalPeakTops = a.peakComputeTopsPerMxu * workers * frequencyScale * vectorIssueEfficiency;
   const effectiveComputeCeilingTops = totalPeakTops * compilerEfficiency;
   const effectiveComputeOpsPerSecond = effectiveComputeCeilingTops * 1e12 * mxuUtilization * parallelUtilization;
   const computeLatencySeconds = operations / positive(effectiveComputeOpsPerSecond);
@@ -279,10 +343,10 @@ export function evaluateRoofline(
   const effectiveHbmBandwidthGbs = a.hbmBandwidthGbs * a.hbmEfficiency;
   const hbmLatencySeconds = bytesTransferred / positive(effectiveHbmBandwidthGbs * 1e9);
   const cAccumulatorTraffic = 2 * w.m * w.n * accumulatorBytes * (w.dataflow === "output-stationary" ? 0.2 : 1);
-  const sramTrafficBytes =
+  const sramTrafficBytes = (
     activationCompulsory * tilesN / activationDataflowBonus +
     weightCompulsory * tilesM / weightDataflowBonus +
-    cAccumulatorTraffic;
+    cAccumulatorTraffic) * invocationCount;
   const sramBandwidthGbs = a.sramBankCount * a.sramBankBandwidthGbs * a.sramEfficiency;
   const sramLatencySeconds = sramTrafficBytes / positive(sramBandwidthGbs * 1e9);
   const multicastFactor = Math.min(workers, Math.max(1, a.multicastFactor));
@@ -291,26 +355,47 @@ export function evaluateRoofline(
     : (activationReadBytes + weightReadBytes) * (workers - 1) / multicastFactor + cSpillBytes;
   const nocLatencySeconds = nocTrafficBytes / positive(a.nocBandwidthGbs * 1e9);
 
-  const resourceTimes = [computeLatencySeconds, hbmLatencySeconds, sramLatencySeconds, nocLatencySeconds];
+  const registerFileCapacityBytes = a.vectorRegisterFileKib * 1024;
+  const registerFileWorkingSetBytes = a.vectorLanes * (activationBytes + weightBytes + accumulatorBytes);
+  const registerFileResidency = a.computeFabric === "vxu"
+    ? Math.min(1, registerFileCapacityBytes / positive(registerFileWorkingSetBytes))
+    : 1;
+  const registerFileTrafficBytes = a.computeFabric === "vxu"
+    ? ((operations / 2) * (activationBytes + weightBytes) +
+      2 * w.m * w.n * accumulatorBytes * invocationCount) / registerFileResidency
+    : 0;
+  const registerFileLatencySeconds = registerFileTrafficBytes /
+    positive(a.vectorRegisterBandwidthGbs * 1e9 * vectorIssueEfficiency);
+
+  const resourceTimes = [computeLatencySeconds, hbmLatencySeconds, sramLatencySeconds, nocLatencySeconds, registerFileLatencySeconds];
   const dominantTime = Math.max(...resourceTimes);
   const resourceSum = resourceTimes.reduce((sum, value) => sum + value, 0);
   const deviceLatencySeconds = dominantTime + (1 - a.overlapEfficiency) * (resourceSum - dominantTime);
-  const hostLatencySeconds = Math.max(0, a.hostOverheadUs + fusion.kernels * a.launchOverheadUs) * 1e-6;
+  const hostLatencySeconds = Math.max(0, a.hostOverheadUs + fusion.kernels * a.launchOverheadUs) * 1e-6 * invocationCount;
   const estimatedLatencySeconds = deviceLatencySeconds + hostLatencySeconds;
   const bottleneckNames: RooflineResult["bottleneck"][] = [
     a.computeFabric === "vxu" ? "VXU" : "MXU",
     "HBM",
     "SRAM",
     "NoC",
+    "RF",
   ];
   const bottleneck = bottleneckNames[resourceTimes.indexOf(dominantTime)];
 
-  const computeEnergyJ = operations * Math.max(0, a.computeEnergyPjPerOp) * 1e-12;
+  const voltageScaleSquared = (a.voltageV / a.nominalVoltageV) ** 2;
+  const computeEnergyJ = operations * Math.max(0, a.computeEnergyPjPerOp) * voltageScaleSquared * 1e-12;
   const hbmEnergyJ = bytesTransferred * Math.max(0, a.hbmEnergyPjPerByte) * 1e-12;
   const sramEnergyJ = sramTrafficBytes * Math.max(0, a.sramEnergyPjPerByte) * 1e-12;
   const nocEnergyJ = nocTrafficBytes * Math.max(0, a.nocEnergyPjPerByte) * 1e-12;
-  const staticEnergyJ = Math.max(0, a.staticPowerW) * estimatedLatencySeconds;
+  const staticEnergyJ = Math.max(0, a.staticPowerW) * (a.voltageV / a.nominalVoltageV) * estimatedLatencySeconds;
   const totalEnergyJ = computeEnergyJ + hbmEnergyJ + sramEnergyJ + nocEnergyJ + staticEnergyJ;
+  const precisionBits = Math.min(STORAGE_BITS[w.activationPrecision], STORAGE_BITS[w.weightPrecision]);
+  const precisionLoss = Math.max(0, workloadInput.precisionSensitivity ?? 2) *
+    (Math.max(0, 16 - precisionBits) / 12) ** 2;
+  const pruningLoss = Math.max(0, workloadInput.pruningSensitivity ?? 12) *
+    (w.pruningPercent / 100) ** positive(workloadInput.pruningExponent ?? 1.5);
+  const estimatedAccuracyPercent = Math.max(0, Math.min(100,
+    (workloadInput.baselineAccuracyPercent ?? 75) - precisionLoss - pruningLoss));
 
   return {
     operations,
@@ -324,6 +409,7 @@ export function evaluateRoofline(
     hbmLatencySeconds,
     sramLatencySeconds,
     nocLatencySeconds,
+    registerFileLatencySeconds,
     deviceLatencySeconds,
     hostLatencySeconds,
     estimatedLatencySeconds,
@@ -340,6 +426,9 @@ export function evaluateRoofline(
     quireFinalizeCycles,
     cyclesPerTile,
     sramCapacityBytes,
+    usableSramCapacityBytes,
+    sramBankSizeKib: a.sramBankSizeKib,
+    doubleBuffering: a.doubleBuffering,
     sramBandwidthGbs,
     allocationABytes,
     allocationBBytes,
@@ -358,6 +447,9 @@ export function evaluateRoofline(
     cSpillBytes,
     sramTrafficBytes,
     nocTrafficBytes,
+    registerFileTrafficBytes,
+    registerFileResidency,
+    vectorIssueEfficiency,
     effectiveHbmBandwidthGbs,
     totalPeakTops,
     effectiveComputeCeilingTops,
@@ -372,7 +464,45 @@ export function evaluateRoofline(
     staticEnergyJ,
     totalEnergyJ,
     averagePowerW: totalEnergyJ / estimatedLatencySeconds,
+    executionPhase,
+    effectiveM,
+    invocationCount,
+    layerCount,
+    frequencyGhz: a.frequencyGhz,
+    voltageV: a.voltageV,
+    estimatedAccuracyPercent,
   };
+}
+
+export function buildAccuracyEnergyPareto(
+  architecture: Architecture,
+  workload: Workload,
+): AccuracyEnergyPoint[] {
+  const precisions: StoragePrecision[] = ["bf16", "posit-16", "int8", "posit-8", "mxfp4", "nvfp4", "int4", "posit-(4,1)", "fp2"];
+  const candidates = precisions.flatMap((precision) =>
+    Array.from({ length: 21 }, (_, index) => index * 5).map((pruningPercent) => {
+      const result = evaluateRoofline(architecture, {
+        ...workload,
+        activationPrecision: precision,
+        weightPrecision: precision,
+        pruningPercent,
+      });
+      return {
+        precision,
+        pruningPercent,
+        estimatedAccuracyPercent: result.estimatedAccuracyPercent,
+        totalEnergyJ: result.totalEnergyJ,
+        estimatedLatencySeconds: result.estimatedLatencySeconds,
+      };
+    }),
+  ).sort((left, right) => left.totalEnergyJ - right.totalEnergyJ);
+
+  let bestAccuracy = -Infinity;
+  return candidates.filter((point) => {
+    if (point.estimatedAccuracyPercent <= bestAccuracy + 1e-9) return false;
+    bestAccuracy = point.estimatedAccuracyPercent;
+    return true;
+  });
 }
 
 export function formatLatency(seconds: number) {

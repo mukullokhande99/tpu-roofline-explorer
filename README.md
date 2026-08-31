@@ -13,6 +13,12 @@ Python CLI model.
 
 ## What it models
 
+- Runtime shape: custom GEMM, prefill, or decode with batch size, sequence length, generated decode tokens, and layer count
+- Configurable SRAM bank size plus single- or double-buffered capacity accounting
+- DVFS controls for frequency-scaled throughput and voltage-squared dynamic compute energy
+- VXU register-file capacity, bandwidth, residency, and vector issue width
+- Accuracy–energy Pareto sweeps across precision and 0–100% pruning; accuracy is a user-calibrated proxy, not benchmark data
+
 - GEMM operation count for `C[M,N] = A[M,K] @ B[K,N]`
 - Tiled HBM traffic for activations, weights, and outputs
 - SRAM-constrained weight and activation reuse

@@ -58,3 +58,39 @@ test("models VXU lane waves separately from systolic MXU tiles", async () => {
   assert.equal(vxu.bottleneck === "VXU" || vxu.bottleneck !== "MXU", true);
   assert.notEqual(vxu.cyclesPerTile, mxu.cyclesPerTile);
 });
+
+test("derives prefill and decode M and scales across layers and tokens", async () => {
+  const { evaluateRoofline } = await vite.ssrLoadModule("/lib/roofline.ts");
+  const prefill = evaluateRoofline(architecture, { ...workload, executionPhase: "prefill", batchSize: 2, sequenceLength: 16, layerCount: 4 });
+  const decode = evaluateRoofline(architecture, { ...workload, executionPhase: "decode", batchSize: 2, decodeTokens: 8, layerCount: 4 });
+  assert.equal(prefill.effectiveM, 32);
+  assert.equal(prefill.invocationCount, 4);
+  assert.equal(decode.effectiveM, 2);
+  assert.equal(decode.invocationCount, 32);
+  assert.equal(prefill.denseOperations, 2 * 32 * workload.n * workload.k * 4);
+});
+
+test("models bank size, double buffering, and DVFS", async () => {
+  const { evaluateRoofline } = await vite.ssrLoadModule("/lib/roofline.ts");
+  const base = evaluateRoofline({ ...architecture, sramBankSizeKib: 128, frequencyGhz: 1, nominalFrequencyGhz: 1, voltageV: 0.8, nominalVoltageV: 0.8 }, workload);
+  const buffered = evaluateRoofline({ ...architecture, sramBankSizeKib: 128, doubleBuffering: true }, workload);
+  const turbo = evaluateRoofline({ ...architecture, frequencyGhz: 2, nominalFrequencyGhz: 1, voltageV: 1.0, nominalVoltageV: 0.8 }, workload);
+  assert.equal(base.sramCapacityBytes, 4 * 128 * 1024);
+  assert.equal(buffered.usableSramCapacityBytes, buffered.sramCapacityBytes / 2);
+  assert.equal(turbo.totalPeakTops, 2 * base.totalPeakTops);
+  assert.ok(turbo.computeEnergyJ > base.computeEnergyJ);
+});
+
+test("applies VXU RF and issue constraints and emits a non-dominated Pareto frontier", async () => {
+  const { evaluateRoofline, buildAccuracyEnergyPareto } = await vite.ssrLoadModule("/lib/roofline.ts");
+  const constrained = evaluateRoofline({ ...architecture, computeFabric: "vxu", vectorLanes: 4096, vectorRegisterFileKib: 1, vectorRegisterBandwidthGbs: 0.001, vectorIssueWidth: 0.5 }, workload);
+  assert.ok(constrained.registerFileResidency < 1);
+  assert.equal(constrained.vectorIssueEfficiency, 0.5);
+  assert.equal(constrained.bottleneck, "RF");
+  const frontier = buildAccuracyEnergyPareto(architecture, { ...workload, baselineAccuracyPercent: 80, precisionSensitivity: 2, pruningSensitivity: 10, pruningExponent: 1.5 });
+  assert.ok(frontier.length > 1);
+  for (let index = 1; index < frontier.length; index += 1) {
+    assert.ok(frontier[index].totalEnergyJ >= frontier[index - 1].totalEnergyJ);
+    assert.ok(frontier[index].estimatedAccuracyPercent > frontier[index - 1].estimatedAccuracyPercent);
+  }
+});
