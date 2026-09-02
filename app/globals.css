@@ -420,6 +420,28 @@ button, input { font: inherit; }
 .model-note { display: flex; gap: 14px; margin: 18px 0 0 373px; color: var(--muted-foreground); font-size: 0.7rem; line-height: 1.6; }
 .model-note span { flex: none; color: var(--amber); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0.1em; }
 
+/* Assignment 3 · NVIDIA GPU hierarchy */
+.gpu-explorer { --gpu-green: #71e6a5; }
+.gpu-brand span:nth-child(1) { background: var(--gpu-green); }
+.gpu-brand span:nth-child(2) { background: var(--cyan); }
+.gpu-brand span:nth-child(3) { background: var(--amber); }
+.gpu-badge { border-color: color-mix(in srgb, var(--gpu-green) 50%, transparent); color: var(--gpu-green); }
+.gpu-summary { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 22px; align-items: end; margin-bottom: 18px; padding: 22px 24px; border: 1px solid color-mix(in srgb, var(--gpu-green) 30%, var(--border)); border-radius: var(--radius); background: linear-gradient(125deg, rgba(113, 230, 165, 0.1), rgba(94, 231, 245, 0.06) 48%, rgba(11, 18, 32, 0.78)); }
+.gpu-summary [data-slot="badge"] { width: fit-content; border-color: color-mix(in srgb, var(--gpu-green) 48%, var(--border)); color: var(--gpu-green); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.65rem; letter-spacing: 0.1em; }
+.gpu-summary h2 { margin: 10px 0 8px; font-size: clamp(1.35rem, 2.8vw, 2.15rem); font-weight: 550; letter-spacing: -0.045em; }
+.gpu-summary p { max-width: 760px; margin: 0; color: #b9cad6; font-size: 0.86rem; line-height: 1.6; }
+.gpu-summary-stat { display: grid; gap: 5px; padding: 16px 18px; border-left: 2px solid var(--gpu-green); background: rgba(3, 8, 16, 0.35); }
+.gpu-summary-stat span { color: var(--muted-foreground); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.08em; }
+.gpu-summary-stat strong { color: var(--gpu-green); font-size: 1.25rem; font-weight: 600; }
+.gpu-summary-stat small { color: var(--muted-foreground); font-size: 0.68rem; }
+.switch-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; color: #b8c8d5; }
+.switch-row > span { display: grid; gap: 2px; }
+.switch-row strong { color: var(--foreground); font-size: 0.72rem; font-weight: 500; }
+.switch-row small { color: var(--muted-foreground); font-size: 0.64rem; }
+.gpu-roofline .graph-legend i { border-radius: 99px; }
+.gpu-effective-line { stroke: var(--foreground); stroke-width: 1.4; stroke-dasharray: 5 6; opacity: 0.58; }
+.graph-note { margin: -7px 4px 2px; color: var(--muted-foreground); font-size: 0.66rem; line-height: 1.45; }
+
 @media (max-width: 1120px) {
   .metric-grid { grid-template-columns: 1fr 1fr; }
   .workload-catalog { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -440,6 +462,7 @@ button, input { font: inherit; }
   .model-tabs { grid-column: 1 / -1; }
   .control-section { border-right: 1px solid var(--border); }
   .model-note { margin-left: 0; }
+  .gpu-summary { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 600px) {

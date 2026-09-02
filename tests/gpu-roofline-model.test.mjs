@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test, { after } from "node:test";
 import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
@@ -47,4 +48,16 @@ test("models occupancy, issue efficiency, 2:4 sparsity, and multi-GPU communicat
   assert.ok(sparse.hbmBytes < dense.hbmBytes);
   assert.ok(distributed.communicationLatencySeconds > 0);
   assert.ok(distributed.totalPeakTflops > dense.totalPeakTflops);
+});
+
+test("exposes the Assignment 3 interactive hierarchy controls and graph", async () => {
+  const component = await readFile(new URL("../components/nvidia-gpu-explorer.tsx", import.meta.url), "utf8");
+  const page = await readFile(new URL("../app/assignment-3/page.tsx", import.meta.url), "utf8");
+  assert.match(page, /NvidiaGpuExplorer/);
+  for (const control of ["Execution phase", "Batch", "Sequence", "Layers", "Precision", "Structured 2:4", "Requested occupancy", "L2 hit rate", "GPU count", "Interconnect"]) {
+    assert.match(component, new RegExp(control));
+  }
+  for (const ceiling of ["HBM", "L2", "Shared", "Register"]) {
+    assert.match(component, new RegExp(`label: \"${ceiling}\"`));
+  }
 });

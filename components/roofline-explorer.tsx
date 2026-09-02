@@ -744,6 +744,9 @@ export function RooflineExplorer() {
           <Link className="assignment-tab" href="/assignment-2">
             Assignment 2<span>Flex-TPU</span>
           </Link>
+          <Link className="assignment-tab" href="/assignment-3">
+            Assignment 3<span>NVIDIA GPU</span>
+          </Link>
         </nav>
         <Badge variant="outline" className="model-badge">
           ANALYTIC MODEL
