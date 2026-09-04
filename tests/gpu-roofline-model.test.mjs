@@ -54,10 +54,39 @@ test("exposes the Assignment 3 interactive hierarchy controls and graph", async 
   const component = await readFile(new URL("../components/nvidia-gpu-explorer.tsx", import.meta.url), "utf8");
   const page = await readFile(new URL("../app/assignment-3/page.tsx", import.meta.url), "utf8");
   assert.match(page, /NvidiaGpuExplorer/);
-  for (const control of ["Execution phase", "Batch", "Sequence", "Layers", "Precision", "Structured 2:4", "Requested occupancy", "L2 hit rate", "GPU count", "Interconnect"]) {
+  for (const control of ["Execution phase", "Batch", "Sequence", "Layers", "Precision", "Structured 2:4", "Requested occupancy", "L2 hit rate", "GPU count", "Interconnect", "GPU clock", "Power limit", "Measured latency", "Baseline accuracy"]) {
     assert.match(component, new RegExp(control));
   }
   for (const ceiling of ["HBM", "L2", "Shared", "Register"]) {
     assert.match(component, new RegExp(`label: \"${ceiling}\"`));
+  }
+});
+
+test("calibrates DVFS, overlap, measured latency, energy, and accuracy", async () => {
+  const { DEFAULT_GPU_SYSTEM_CONTROLS, DEFAULT_GPU_WORKLOAD, NVIDIA_GPU_PRESETS, evaluateGpuSystem } = await vite.ssrLoadModule("/lib/gpu-roofline.ts");
+  const architecture = NVIDIA_GPU_PRESETS.h100Sxm;
+  const baseline = evaluateGpuSystem(architecture, DEFAULT_GPU_WORKLOAD, DEFAULT_GPU_SYSTEM_CONTROLS);
+  const constrained = evaluateGpuSystem(architecture, { ...DEFAULT_GPU_WORKLOAD, pruningPercent: 50 }, {
+    ...DEFAULT_GPU_SYSTEM_CONTROLS,
+    clockPercent: 70,
+    powerLimitPercent: 60,
+    overlapEfficiency: 0,
+    measuredLatencyUs: baseline.calibratedLatencySeconds * 1e6,
+  });
+  assert.ok(constrained.calibratedLatencySeconds > baseline.calibratedLatencySeconds);
+  assert.ok(constrained.predictedAccuracyPercent < baseline.predictedAccuracyPercent);
+  assert.ok(constrained.energyJoules > 0);
+  assert.ok(Number.isFinite(constrained.averagePowerW));
+  assert.notEqual(constrained.measuredDeltaPercent, null);
+});
+
+test("generates a non-dominated accuracy-energy frontier", async () => {
+  const { DEFAULT_GPU_SYSTEM_CONTROLS, DEFAULT_GPU_WORKLOAD, NVIDIA_GPU_PRESETS, generateGpuPareto } = await vite.ssrLoadModule("/lib/gpu-roofline.ts");
+  const points = generateGpuPareto(NVIDIA_GPU_PRESETS.b200Sxm, DEFAULT_GPU_WORKLOAD, DEFAULT_GPU_SYSTEM_CONTROLS);
+  const frontier = points.filter((point) => point.isPareto);
+  assert.ok(points.length >= 64);
+  assert.ok(frontier.length > 1);
+  for (const point of frontier) {
+    assert.ok(!points.some((other) => other.energyJoules < point.energyJoules && other.accuracyPercent > point.accuracyPercent));
   }
 });

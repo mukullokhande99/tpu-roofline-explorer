@@ -109,6 +109,45 @@ export type GpuRooflineResult = {
   wavesPerSm: number;
 };
 
+export type GpuSystemControls = {
+  clockPercent: number;
+  powerLimitPercent: number;
+  computeCalibration: number;
+  bandwidthCalibration: number;
+  overlapEfficiency: number;
+  measuredLatencyUs: number;
+  baselineAccuracyPercent: number;
+  pruningSensitivity: number;
+  computeEnergyPjPerOp: number;
+  hbmEnergyPjPerByte: number;
+  l2EnergyPjPerByte: number;
+  sharedEnergyPjPerByte: number;
+  registerEnergyPjPerByte: number;
+};
+
+export type GpuSystemResult = {
+  roofline: GpuRooflineResult;
+  adjustedArchitecture: GpuArchitecture;
+  serialResourceLatencySeconds: number;
+  overlappedResourceLatencySeconds: number;
+  calibratedLatencySeconds: number;
+  calibratedPerformanceTflops: number;
+  energyJoules: number;
+  averagePowerW: number;
+  predictedAccuracyPercent: number;
+  precisionAccuracyPenalty: number;
+  measuredDeltaPercent: number | null;
+};
+
+export type GpuParetoPoint = {
+  precision: GpuPrecision;
+  pruningPercent: number;
+  accuracyPercent: number;
+  energyJoules: number;
+  latencySeconds: number;
+  isPareto: boolean;
+};
+
 const clamp01 = (value: number) => Math.min(1, Math.max(0, Number.isFinite(value) ? value : 0));
 const positive = (value: number, fallback = 1) =>
   Math.max(Number.isFinite(value) ? value : fallback, Number.EPSILON);
@@ -260,6 +299,34 @@ export const DEFAULT_GPU_WORKLOAD: GpuWorkload = {
   communicationFraction: 0,
 };
 
+export const DEFAULT_GPU_SYSTEM_CONTROLS: GpuSystemControls = {
+  clockPercent: 100,
+  powerLimitPercent: 100,
+  computeCalibration: 1,
+  bandwidthCalibration: 1,
+  overlapEfficiency: 0.8,
+  measuredLatencyUs: 0,
+  baselineAccuracyPercent: 75,
+  pruningSensitivity: 18,
+  computeEnergyPjPerOp: 0.45,
+  hbmEnergyPjPerByte: 15,
+  l2EnergyPjPerByte: 0.8,
+  sharedEnergyPjPerByte: 0.12,
+  registerEnergyPjPerByte: 0.03,
+};
+
+const PRECISION_ACCURACY_PENALTY: Record<GpuPrecision, number> = {
+  fp32: 0,
+  tf32: 0.05,
+  bf16: 0.1,
+  fp16: 0.15,
+  "fp8-e4m3": 0.6,
+  "fp8-e5m2": 0.8,
+  fp4: 2.2,
+  int8: 0.5,
+  int4: 2.8,
+};
+
 export function evaluateGpuRoofline(
   architecture: GpuArchitecture,
   workload: GpuWorkload,
@@ -393,4 +460,124 @@ export function evaluateGpuRoofline(
     tileCount,
     wavesPerSm: tileCount / positive(architecture.smCount * gpuCount),
   };
+}
+
+export function evaluateGpuSystem(
+  architecture: GpuArchitecture,
+  workload: GpuWorkload,
+  controls: GpuSystemControls = DEFAULT_GPU_SYSTEM_CONTROLS,
+): GpuSystemResult {
+  const clockScale = Math.min(1.2, Math.max(0.25, controls.clockPercent / 100));
+  const powerScale = Math.min(1, Math.max(0.25, controls.powerLimitPercent / 100));
+  const computeScale = clockScale * Math.min(1, 0.35 + 0.65 * powerScale) *
+    Math.min(1.5, Math.max(0.1, controls.computeCalibration));
+  const bandwidthScale = Math.sqrt(powerScale) * (0.8 + 0.2 * clockScale) *
+    Math.min(1.5, Math.max(0.1, controls.bandwidthCalibration));
+  const scalePeaks = (peaks: GpuArchitecture["peakTensorTflops"]) =>
+    Object.fromEntries(Object.entries(peaks).map(([precision, peak]) =>
+      [precision, (peak ?? 0) * computeScale])) as GpuArchitecture["peakTensorTflops"];
+  const adjustedArchitecture: GpuArchitecture = {
+    ...architecture,
+    gpuClockGhz: architecture.gpuClockGhz * clockScale,
+    peakTensorTflops: scalePeaks(architecture.peakTensorTflops),
+    hbmBandwidthGbs: architecture.hbmBandwidthGbs * bandwidthScale,
+    l2BandwidthGbs: architecture.l2BandwidthGbs * bandwidthScale,
+    sharedMemoryBandwidthGbs: architecture.sharedMemoryBandwidthGbs * bandwidthScale,
+    registerFileBandwidthGbs: architecture.registerFileBandwidthGbs * bandwidthScale,
+    boardPowerW: architecture.boardPowerW * powerScale,
+  };
+  const roofline = evaluateGpuRoofline(adjustedArchitecture, workload);
+  const resourceTimes = [
+    roofline.computeLatencySeconds,
+    roofline.hbmLatencySeconds,
+    roofline.l2LatencySeconds,
+    roofline.sharedMemoryLatencySeconds,
+    roofline.registerFileLatencySeconds,
+  ];
+  const dominant = Math.max(...resourceTimes);
+  const serialResourceLatencySeconds = resourceTimes.reduce((sum, value) => sum + value, 0);
+  const overlap = clamp01(controls.overlapEfficiency);
+  const overlappedResourceLatencySeconds = dominant +
+    (serialResourceLatencySeconds - dominant) * (1 - overlap);
+  const calibratedLatencySeconds = overlappedResourceLatencySeconds +
+    roofline.communicationLatencySeconds + roofline.launchLatencySeconds;
+  const calibratedPerformanceTflops = roofline.operations /
+    positive(calibratedLatencySeconds * 1e12);
+
+  const precisionBits = GPU_PRECISION_BITS[workload.precision];
+  const precisionEnergyScale = Math.max(0.2, precisionBits / 16);
+  const computeEnergy = roofline.operations * positive(controls.computeEnergyPjPerOp) *
+    precisionEnergyScale * 1e-12;
+  const memoryEnergy = (
+    roofline.hbmBytes * positive(controls.hbmEnergyPjPerByte) +
+    roofline.l2Bytes * positive(controls.l2EnergyPjPerByte) +
+    roofline.sharedMemoryBytes * positive(controls.sharedEnergyPjPerByte) +
+    roofline.registerFileBytes * positive(controls.registerEnergyPjPerByte)
+  ) * 1e-12;
+  const gpuCount = Math.max(1, Math.round(workload.multiGpuCount));
+  const staticEnergy = adjustedArchitecture.boardPowerW * gpuCount * 0.18 *
+    calibratedLatencySeconds;
+  const interconnectEnergy = roofline.communicationLatencySeconds *
+    adjustedArchitecture.boardPowerW * gpuCount * 0.08;
+  const energyJoules = computeEnergy + memoryEnergy + staticEnergy + interconnectEnergy;
+  const averagePowerW = energyJoules / positive(calibratedLatencySeconds);
+
+  const precisionAccuracyPenalty = PRECISION_ACCURACY_PENALTY[workload.precision];
+  const pruningFraction = Math.min(1, Math.max(0, workload.pruningPercent / 100));
+  const sparsityPenalty = Math.max(0, controls.pruningSensitivity) *
+    Math.pow(pruningFraction, 1.65) * (workload.structuredTwoToFour ? 0.72 : 1);
+  const predictedAccuracyPercent = Math.max(0, Math.min(100,
+    controls.baselineAccuracyPercent - precisionAccuracyPenalty - sparsityPenalty));
+  const measuredLatencySeconds = controls.measuredLatencyUs * 1e-6;
+  const measuredDeltaPercent = measuredLatencySeconds > 0
+    ? (calibratedLatencySeconds - measuredLatencySeconds) / measuredLatencySeconds * 100
+    : null;
+
+  return {
+    roofline,
+    adjustedArchitecture,
+    serialResourceLatencySeconds,
+    overlappedResourceLatencySeconds,
+    calibratedLatencySeconds,
+    calibratedPerformanceTflops,
+    energyJoules,
+    averagePowerW,
+    predictedAccuracyPercent,
+    precisionAccuracyPenalty,
+    measuredDeltaPercent,
+  };
+}
+
+export function generateGpuPareto(
+  architecture: GpuArchitecture,
+  workload: GpuWorkload,
+  controls: GpuSystemControls = DEFAULT_GPU_SYSTEM_CONTROLS,
+): GpuParetoPoint[] {
+  const supportedPrecisions = Object.keys(architecture.peakTensorTflops) as GpuPrecision[];
+  const candidates = supportedPrecisions.flatMap((precision) =>
+    Array.from({ length: 16 }, (_, index) => index * 5).map((pruningPercent) => {
+      const point = evaluateGpuSystem(architecture, {
+        ...workload,
+        precision,
+        pruningPercent,
+        structuredTwoToFour: pruningPercent === 50,
+      }, controls);
+      return {
+        precision,
+        pruningPercent,
+        accuracyPercent: point.predictedAccuracyPercent,
+        energyJoules: point.energyJoules,
+        latencySeconds: point.calibratedLatencySeconds,
+        isPareto: false,
+      };
+    }),
+  );
+  return candidates.map((candidate, index, all) => ({
+    ...candidate,
+    isPareto: !all.some((other, otherIndex) => otherIndex !== index &&
+      other.energyJoules <= candidate.energyJoules &&
+      other.accuracyPercent >= candidate.accuracyPercent &&
+      (other.energyJoules < candidate.energyJoules ||
+        other.accuracyPercent > candidate.accuracyPercent)),
+  }));
 }

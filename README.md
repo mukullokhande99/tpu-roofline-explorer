@@ -35,13 +35,13 @@ Python CLI model.
 
 ## Development branches
 
-- `assignment-3-nvidia-gpu`: staged NVIDIA GPU roofline work, now at the second
-  25% milestone. It includes the GPU analytical core plus an interactive
+- `assignment-3-nvidia-gpu`: completed NVIDIA GPU roofline assignment. It
+  includes the GPU analytical core plus an interactive
   `/assignment-3` surface with Ampere/Hopper/Blackwell presets, workload and
   precision controls, occupancy and tile controls, structured 2:4 sparsity,
-  multi-GPU communication, and HBM/L2/shared-memory/register-file rooflines.
-  It remains off `master` until the remaining calibration, Pareto, and
-  integration milestones are complete.
+  multi-GPU communication, HBM/L2/shared-memory/register-file rooflines,
+  DVFS and power limits, measured-latency calibration, overlap modeling,
+  decomposed energy, and an accuracy-energy Pareto frontier.
 
 - `master` is the stable, tested explorer.
 - `full-system-modeling` is the integration branch for the expanded model.
@@ -66,6 +66,27 @@ banking and A/B/C allocation; HBM/SRAM/NoC efficiency; multicast; loop order,
 dataflow, fusion, compiler, tile-overlap, and host controls; plus energy
 coefficients. The roofline graph and latency, traffic, pipeline, utilization,
 and energy breakdowns update live.
+
+## Assignment 3: NVIDIA GPU roofline
+
+Open `/assignment-3` to compare A100, H100, H200, and B200 configurations.
+The model derives effective GEMM shapes from custom, prefill, and decode modes;
+tracks batch, sequence length, layers, and decode tokens; and exposes precision,
+accumulator width, pruning, structured 2:4 sparsity, Tensor Core tiles,
+occupancy, issue efficiency, L2 hit rate, shared/register reuse, GPU count, and
+NVLink/PCIe communication.
+
+Three linked analysis views are provided:
+
+1. A hierarchical roofline for HBM, L2, shared memory, and the register file.
+2. A modeled-versus-measured calibration view with explicit compute,
+   bandwidth, DVFS, power-limit, and overlap coefficients.
+3. A non-dominated accuracy-energy Pareto sweep over supported precisions and
+   pruning levels.
+
+Accuracy and energy outputs are sensitivity estimates. Their visible baseline,
+precision penalty, pruning sensitivity, and pJ coefficients must be replaced
+with workload measurements before they are used as publication results.
 
 ```bash
 npm ci
